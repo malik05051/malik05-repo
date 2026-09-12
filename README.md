@@ -13,7 +13,7 @@ Add this to the end of `/etc/pacman.conf`:
 ```ini
 [malik05]
 SigLevel = Optional TrustAll
-Server = https://github.com/malik05051/pacman-repo/releases/download/repo
+Server = https://github.com/malik05051/malik05-repo/releases/download/repo
 ```
 
 Then:
