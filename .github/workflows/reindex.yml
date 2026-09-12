@@ -19,9 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
 
+    # The rebuild below uses associative arrays; without this a container job
+    # runs each step under sh.
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed github-cli
+        run: pacman -Syu --noconfirm --needed git github-cli
 
       - name: Fetch the published packages
         env:
@@ -29,7 +35,8 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/pkgs
-          gh release download "$RELEASE_TAG" --dir /tmp/pkgs --pattern '*.pkg.tar.zst'
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/pkgs --pattern '*.pkg.tar.zst'
           ls -l /tmp/pkgs
 
       - name: Rebuild the database
@@ -46,6 +53,12 @@ jobs:
             info="$(bsdtar -xOqf "$pkg" .PKGINFO)"
             name="$(awk -F' = ' '$1 == "pkgname" { print $2 }' <<<"$info")"
             ver="$(awk -F' = ' '$1 == "pkgver" { print $2 }' <<<"$info")"
+            # An empty name would be a fatal bad subscript below, so a package
+            # whose .PKGINFO could not be read is passed over instead.
+            if [ -z "$name" ] || [ -z "$ver" ]; then
+              echo "skipping $(basename "$pkg"): no pkgname/pkgver in .PKGINFO"
+              continue
+            fi
             if [ -z "${newest[$name]:-}" ] \
             || [ "$(vercmp "$ver" "${newest[$name]%%|*}")" -gt 0 ]; then
               newest[$name]="$ver|$pkg"
@@ -71,7 +84,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          gh release upload "$RELEASE_TAG" \
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             "/tmp/repo/$REPO_NAME.db" \
             "/tmp/repo/$REPO_NAME.db.tar.gz" \
             "/tmp/repo/$REPO_NAME.files" \
