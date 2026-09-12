@@ -1,7 +1,7 @@
 # Maintainer: malik05051 <belhajjimalik1@gmail.com>
 
 _pkgname=Limine-systemd-bootctl
-_tag=v12.9.0-modified
+_tag=v12.9.1-modified
 
 pkgname=limine-systemd-bootctl
 # A pkgver may not contain a hyphen; the tag's becomes a dot.
@@ -9,7 +9,7 @@ pkgver=${_tag#v}
 pkgver=${pkgver//-/.}
 pkgrel=1
 # The version scheme changed from a commit count to the tag, and a tag such as
-# 12.9.0.modified sorts *below* the 12.9.0.r4468.g7ad9085c packages already
+# 12.9.1.modified sorts *below* the 12.9.0.r4468.g7ad9085c packages already
 # published: pacman compares "modified" against "r4468" as text. Without an
 # epoch nobody who installed one of those would ever be offered this.
 epoch=1
