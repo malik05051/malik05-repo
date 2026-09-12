@@ -104,6 +104,11 @@ that has succeeded, so a signing failure leaves the loader you are currently
 booting exactly where it was. The hook reports the failure and pacman shows it,
 rather than leaving you with an image the firmware will refuse.
 
+Every destination is read back and compared against what was written to it. A
+rename that reports success and leaves something else behind is how a machine
+ends up booting a loader nobody installed, so the hook checks rather than
+assumes, and fails the transaction if the two do not match.
+
 ## Signing the packages
 
 Every package and the database are signed by

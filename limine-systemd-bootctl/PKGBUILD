@@ -7,7 +7,7 @@ pkgname=limine-systemd-bootctl
 # A pkgver may not contain a hyphen; the tag's becomes a dot.
 pkgver=${_tag#v}
 pkgver=${pkgver//-/.}
-pkgrel=1
+pkgrel=2
 # The version scheme changed from a commit count to the tag, and a tag such as
 # 12.9.1.modified sorts *below* the 12.9.0.r4468.g7ad9085c packages already
 # published: pacman compares "modified" against "r4468" as text. Without an

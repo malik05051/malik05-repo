@@ -56,7 +56,25 @@ for target in "${TARGETS[@]}"; do
         continue
     fi
 
+    # What should be at the destination once the rename lands.
+    want="$(sha256sum <"$tmp" | cut -d' ' -f1)"
+
     mv -f "$tmp" "$dest"
+    sync -f "$dest" 2>/dev/null || sync
+
+    # Do not take the rename's word for it. A destination holding something
+    # other than what was just written is how a machine ends up booting a
+    # loader nobody installed, and it has happened.
+    got="$(sha256sum <"$dest" | cut -d' ' -f1)"
+
+    if [ "$got" != "$want" ]; then
+        echo "limine: $dest does not contain what was written to it" >&2
+        echo "limine:   expected $want" >&2
+        echo "limine:   found    $got" >&2
+        status=1
+        continue
+    fi
+
     echo "limine: updated $dest"
 done
 
