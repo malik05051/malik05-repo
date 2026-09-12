@@ -1,15 +1,18 @@
 # Maintainer: malik05051 <belhajjimalik1@gmail.com>
 
 _pkgname=Limine-systemd-bootctl
-_branch=v12.x
-
-# Upstream Limine release the fork currently sits on. Bump this when the fork
-# rebases onto a newer one, so the package keeps sorting above Arch's limine.
-_baseversion=12.9.0
+_tag=v12.9.0-modified
 
 pkgname=limine-systemd-bootctl
-pkgver=${_baseversion}
+# A pkgver may not contain a hyphen; the tag's becomes a dot.
+pkgver=${_tag#v}
+pkgver=${pkgver//-/.}
 pkgrel=1
+# The version scheme changed from a commit count to the tag, and a tag such as
+# 12.9.0.modified sorts *below* the 12.9.0.r4468.g7ad9085c packages already
+# published: pacman compares "modified" against "r4468" as text. Without an
+# epoch nobody who installed one of those would ever be offered this.
+epoch=1
 pkgdesc='Limine bootloader with systemd Boot Loader Interface support'
 arch=('x86_64')
 url='https://github.com/malik05051/Limine-systemd-bootctl'
@@ -21,7 +24,7 @@ conflicts=('limine')
 # The EFI and BIOS blobs are firmware images, not host executables; leave them
 # exactly as the build produced them.
 options=('!strip' '!debug')
-source=("git+${url}.git#branch=${_branch}"
+source=("git+${url}.git#tag=${_tag}"
         'limine-esp-sync.hook'
         'limine-esp-sync'
         'limine-esp-sync.conf.example')
@@ -33,11 +36,10 @@ sha256sums=('SKIP'
 pkgver() {
     cd "${_pkgname}"
 
-    # The fork carries no tags of its own, so the upstream release it is based
-    # on is spelt out above and the fork's own commits count from there.
-    printf '%s.r%s.g%s' "${_baseversion}" \
-        "$(git rev-list --count HEAD)" \
-        "$(git rev-parse --short HEAD)"
+    # A pkgver may not contain a hyphen, so the one in the tag becomes a dot.
+    # The loader still reports the tag as it is written: version.sh feeds
+    # LoaderInfo, and it has no such restriction.
+    git describe --tags | sed 's/^v//; s/-/./g'
 }
 
 prepare() {

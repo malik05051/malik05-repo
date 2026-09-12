@@ -4,9 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-  schedule:
-    # The PKGBUILDs track git branches, so rebuild weekly to pick up commits.
-    - cron: '0 4 * * 0'
 
 permissions:
   contents: write

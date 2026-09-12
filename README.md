@@ -41,8 +41,8 @@ and indexes everything.
 
 Every directory holding a `PKGBUILD` is a package.
 [`.github/workflows/build.yml`](.github/workflows/build.yml) builds all of
-them in an `archlinux:base-devel` container on every push to `main`, weekly,
-and on demand, then:
+them in an `archlinux:base-devel` container on every push to `main` and on
+demand, then:
 
 1. runs `makepkg -s` for each package,
 2. adds the results to `malik05.db.tar.gz` with `repo-add`, carrying the
@@ -53,8 +53,10 @@ and on demand, then:
 `.db` and `.files` are uploaded as copies of their `.tar.gz` counterparts,
 because `repo-add` makes them symlinks and a release asset cannot be one.
 
-The PKGBUILDs track git branches rather than tags, which is why the weekly
-rebuild exists: it picks up commits made to those branches since the last run.
+`limine-systemd-bootctl` builds from a git tag rather than a branch, so the
+package is reproducible and the version the loader reports is stable. Shipping
+new work therefore means tagging the fork and bumping `_tag` in the PKGBUILD;
+commits pushed to `v12.x` alone change nothing here.
 
 Packages uploaded to the release by hand are not indexed by that workflow,
 which only sees what it built. Run **Reindex the repository database**
