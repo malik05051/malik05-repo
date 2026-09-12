@@ -1,0 +1,63 @@
+#!/bin/bash
+# Copies the EFI binaries this package installed onto the ESP, signing them on
+# the way. Driven entirely by /etc/limine-esp-sync.conf; without that file it
+# does nothing, because where the ESP is mounted and how images are signed are
+# not things a package can guess.
+
+set -euo pipefail
+
+conf=/etc/limine-esp-sync.conf
+
+if [ ! -r "$conf" ]; then
+    echo "limine: $conf does not exist, leaving the ESP alone."
+    echo "limine: see /usr/share/doc/limine/limine-esp-sync.conf.example"
+    exit 0
+fi
+
+TARGETS=()
+SIGN_COMMAND=""
+
+# shellcheck source=/dev/null
+. "$conf"
+
+if [ "${#TARGETS[@]}" -eq 0 ]; then
+    echo "limine: TARGETS is empty in $conf, nothing to copy."
+    exit 0
+fi
+
+status=0
+
+for target in "${TARGETS[@]}"; do
+    read -r name dest <<<"$target"
+    src="/usr/share/limine/$name"
+
+    if [ ! -f "$src" ]; then
+        echo "limine: $src does not exist, skipping $dest" >&2
+        status=1
+        continue
+    fi
+
+    if [ ! -d "${dest%/*}" ]; then
+        echo "limine: ${dest%/*} does not exist, skipping $dest" >&2
+        status=1
+        continue
+    fi
+
+    # Sign a temporary copy and rename it into place only once that has
+    # worked. Overwriting the running loader with an image that then fails to
+    # sign would leave a Secure Boot machine unable to boot.
+    tmp="$dest.new"
+    install -m 0644 "$src" "$tmp"
+
+    if [ -n "$SIGN_COMMAND" ] && ! $SIGN_COMMAND "$tmp"; then
+        echo "limine: signing failed for $dest, leaving the existing one alone" >&2
+        rm -f "$tmp"
+        status=1
+        continue
+    fi
+
+    mv -f "$tmp" "$dest"
+    echo "limine: updated $dest"
+done
+
+exit "$status"

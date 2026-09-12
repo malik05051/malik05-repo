@@ -1,0 +1,28 @@
+# Copy to /etc/limine-esp-sync.conf and edit. Without that file the pacman
+# hook does nothing at all.
+
+# Which binaries to copy where. Each entry is a filename under
+# /usr/share/limine, a space, and the absolute path to write it to. The
+# destination directory must already exist, and neither path may contain
+# spaces.
+#
+# The two below are the usual pair: the loader the firmware's boot entry
+# points at, and the removable-media fallback.
+TARGETS=(
+    "BOOTX64.EFI /boot/efi/EFI/LIMINE/LIMINE_X64.EFI"
+    "BOOTX64.EFI /boot/efi/EFI/BOOT/BOOTX64.EFI"
+)
+
+# Run against each copied file before it is moved into place. Leave empty on a
+# machine without Secure Boot. The command is given the file as its only
+# argument and must sign it where it lies.
+SIGN_COMMAND="sbctl sign"
+
+# sbsign writes its output elsewhere rather than signing in place, so it needs
+# wrapping. A function defined here works as a SIGN_COMMAND:
+#
+# sign_with_sbsign() {
+#     sbsign --key /root/secureboot/db.key --cert /root/secureboot/db.crt \
+#         --output "$1" "$1"
+# }
+# SIGN_COMMAND=sign_with_sbsign

@@ -32,12 +32,10 @@ The release also still carries the older `arab.db`, which indexes the
 already pointing pacman at `[arab]` keeps working; `[malik05]` supersedes it
 and indexes everything.
 
-> **The packages are not signed.** `SigLevel = Optional TrustAll` tells pacman
-> to install them anyway. Transport is HTTPS, so this is not about
-> eavesdropping; it means you are trusting that whatever the release holds was
-> put there by this repository's CI and not by someone who got at the account.
-> For a bootloader that is worth weighing. Signing is the fix, and the
-> workflow has a place for it; see below.
+> **`SigLevel = Optional TrustAll` is only correct while the packages are
+> unsigned.** It tells pacman to install whatever the release holds without
+> checking who produced it. Once signing is switched on (below), change that
+> line to `SigLevel = Required` and import the key.
 
 ## How packages are built
 
@@ -69,9 +67,63 @@ in the release, keeping the newest version of each.
 Create a directory named after the package with a `PKGBUILD` in it and push to
 `main`. Nothing else needs registering.
 
+## Keeping the ESP up to date
+
+`pacman -S` writes `/usr/share/limine/` and nothing else. The binaries the
+firmware actually loads are separate copies on the ESP, so an upgrade does not
+reach them until something copies them across.
+
+`limine-systemd-bootctl` ships a pacman hook that will do it, and does nothing
+at all until you configure it:
+
+```console
+# cp /usr/share/doc/limine/limine-esp-sync.conf.example /etc/limine-esp-sync.conf
+# $EDITOR /etc/limine-esp-sync.conf
+```
+
+Set `TARGETS` to the paths on your ESP and `SIGN_COMMAND` to whatever signs an
+EFI binary on your machine (empty if you do not use Secure Boot). From then on
+every upgrade of the package copies the new loader across.
+
+Each file is signed under a temporary name and renamed into place only once
+that has succeeded, so a signing failure leaves the loader you are currently
+booting exactly where it was. The hook reports the failure and pacman shows it,
+rather than leaving you with an image the firmware will refuse.
+
 ## Signing the packages
 
-The workflow does not sign anything yet. To change that: generate a signing
-key, add its private half as a repository secret, have the build step pass
-`--sign` to `makepkg` and `repo-add`, publish the public key, and have users
-`pacman-key --add` it and switch the `SigLevel` above to `Required`.
+Signing is off until the `GPG_PRIVATE_KEY` secret exists; both workflows check
+for it and publish unsigned otherwise. To turn it on:
+
+1. Generate a signing key. Give it **no passphrase** — the workflows run
+   unattended, and the repository secret is what protects it:
+
+   ```console
+   $ gpg --quick-generate-key 'malik05 repository <you@example.com>' \
+       default default never
+   $ gpg --export-secret-keys --armor <fingerprint>
+   ```
+
+2. Put that armoured private key in the repository's
+   `GPG_PRIVATE_KEY` secret (Settings -> Secrets and variables -> Actions).
+
+3. Run **Reindex the repository database** from the Actions tab. It signs every
+   package that has no signature yet, including any uploaded by hand, signs the
+   database, and publishes the public key as `malik05.asc` beside it.
+
+Users then import the key once and tighten `SigLevel`:
+
+```console
+$ curl -LO https://github.com/malik05051/malik05-repo/releases/download/repo/malik05.asc
+# pacman-key --add malik05.asc
+# pacman-key --lsign-key <fingerprint>
+```
+
+```ini
+[malik05]
+SigLevel = Required
+Server = https://github.com/malik05051/malik05-repo/releases/download/repo
+```
+
+If the key is ever exposed, revoke it, delete the secret, generate a new one
+and run the reindex again; every signature in the release is replaced.

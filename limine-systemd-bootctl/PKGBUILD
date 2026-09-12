@@ -21,8 +21,14 @@ conflicts=('limine')
 # The EFI and BIOS blobs are firmware images, not host executables; leave them
 # exactly as the build produced them.
 options=('!strip' '!debug')
-source=("git+${url}.git#branch=${_branch}")
-sha256sums=('SKIP')
+source=("git+${url}.git#branch=${_branch}"
+        'limine-esp-sync.hook'
+        'limine-esp-sync'
+        'limine-esp-sync.conf.example')
+sha256sums=('SKIP'
+            '78a51bea648d1ea6893ef2317a0b4872b147034006b51cdb91983233099ac360'
+            'e062191935e9684011c9f55edb3f69523fa9604465fa9abfea04e22f2cc0fa57'
+            'f4cc257e1701bc060fcc6f8bca45b1ac89f203d23b1bef1c6dccc1dc351c6860')
 
 pkgver() {
     cd "${_pkgname}"
@@ -59,4 +65,13 @@ package() {
     cd "${_pkgname}"
 
     make DESTDIR="${pkgdir}" install
+
+    cd "${srcdir}"
+
+    # Copying the loader onto the ESP is opt-in: the hook does nothing until
+    # /etc/limine-esp-sync.conf exists, so installing this package never
+    # rewrites anyone's boot files behind their back.
+    install -Dm0644 limine-esp-sync.hook         "${pkgdir}/usr/share/libalpm/hooks/95-limine-esp-sync.hook"
+    install -Dm0755 limine-esp-sync         "${pkgdir}/usr/share/libalpm/scripts/limine-esp-sync"
+    install -Dm0644 limine-esp-sync.conf.example         "${pkgdir}/usr/share/doc/limine/limine-esp-sync.conf.example"
 }

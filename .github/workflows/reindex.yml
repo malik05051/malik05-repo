@@ -12,6 +12,7 @@ permissions:
 env:
   REPO_NAME: malik05
   RELEASE_TAG: repo
+  GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
 
 jobs:
   reindex:
@@ -27,7 +28,16 @@ jobs:
 
     steps:
       - name: Install dependencies
-        run: pacman -Syu --noconfirm --needed git github-cli
+        run: pacman -Syu --noconfirm --needed git github-cli gnupg
+
+      - name: Import the signing key
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -eu
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          fpr="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
+          echo "GPG_KEY_ID=$fpr" >>"$GITHUB_ENV"
+          echo "Signing as $fpr"
 
       - name: Fetch the published packages
         env:
@@ -36,8 +46,22 @@ jobs:
           set -eu
           mkdir -p /tmp/pkgs
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --dir /tmp/pkgs --pattern '*.pkg.tar.zst'
+            --dir /tmp/pkgs --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig'
           ls -l /tmp/pkgs
+
+      - name: Sign whatever is not signed yet
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -eu
+          # Packages uploaded by hand arrive without a signature. Under
+          # SigLevel = Required pacman refuses those, so sign them here rather
+          # than leave half the repository uninstallable.
+          for pkg in /tmp/pkgs/*.pkg.tar.zst; do
+            if [ ! -e "$pkg.sig" ]; then
+              echo "signing $(basename "$pkg")"
+              gpg --batch --yes --detach-sign --no-armor -u "$GPG_KEY_ID" "$pkg"
+            fi
+          done
 
       - name: Rebuild the database
         run: |
@@ -71,13 +95,43 @@ jobs:
             keep+=("${newest[$name]#*|}")
           done
 
-          repo-add "/tmp/repo/$REPO_NAME.db.tar.gz" "${keep[@]}"
+          # repo-add records a package's signature only if it sits beside it.
+          for pkg in "${keep[@]}"; do
+            if [ -e "$pkg.sig" ]; then
+              cp "$pkg.sig" /tmp/repo/
+            fi
+            cp "$pkg" /tmp/repo/
+          done
 
-          # repo-add leaves .db and .files as symlinks to the tarballs, and a
-          # release asset cannot be a symlink, so publish copies instead.
-          rm -f "/tmp/repo/$REPO_NAME.db" "/tmp/repo/$REPO_NAME.files"
-          cp "/tmp/repo/$REPO_NAME.db.tar.gz" "/tmp/repo/$REPO_NAME.db"
-          cp "/tmp/repo/$REPO_NAME.files.tar.gz" "/tmp/repo/$REPO_NAME.files"
+          repo_pkgs=()
+          for pkg in "${keep[@]}"; do
+            repo_pkgs+=("/tmp/repo/$(basename "$pkg")")
+          done
+
+          if [ -n "${GPG_KEY_ID:-}" ]; then
+            repo-add --sign --key "$GPG_KEY_ID" \
+              "/tmp/repo/$REPO_NAME.db.tar.gz" "${repo_pkgs[@]}"
+            gpg --export --armor "$GPG_KEY_ID" >"/tmp/repo/$REPO_NAME.asc"
+          else
+            repo-add "/tmp/repo/$REPO_NAME.db.tar.gz" "${repo_pkgs[@]}"
+          fi
+
+          # repo-add leaves .db and .files (and their signatures) as symlinks
+          # to the tarballs, and a release asset cannot be a symlink, so
+          # publish copies instead.
+          for suffix in '' .sig; do
+            for name in db files; do
+              rm -f "/tmp/repo/$REPO_NAME.$name$suffix"
+              if [ -e "/tmp/repo/$REPO_NAME.$name.tar.gz$suffix" ]; then
+                cp "/tmp/repo/$REPO_NAME.$name.tar.gz$suffix" \
+                   "/tmp/repo/$REPO_NAME.$name$suffix"
+              fi
+            done
+          done
+
+          # The packages themselves are already published; only signatures
+          # minted just now and the database need uploading.
+          rm -f /tmp/repo/*.pkg.tar.zst
 
       - name: Publish the database
         env:
@@ -85,8 +139,4 @@ jobs:
         run: |
           set -eu
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            "/tmp/repo/$REPO_NAME.db" \
-            "/tmp/repo/$REPO_NAME.db.tar.gz" \
-            "/tmp/repo/$REPO_NAME.files" \
-            "/tmp/repo/$REPO_NAME.files.tar.gz" \
-            --clobber
+            /tmp/repo/* --clobber

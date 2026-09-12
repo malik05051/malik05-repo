@@ -16,6 +16,9 @@ env:
   REPO_NAME: malik05
   # Fixed release the packages and database are published under.
   RELEASE_TAG: repo
+  # Set the GPG_PRIVATE_KEY secret to have packages and the database signed.
+  # Everything below degrades to publishing them unsigned when it is absent.
+  GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
 
 jobs:
   build:
@@ -27,7 +30,7 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            git autoconf automake nasm mtools llvm clang lld github-cli
+            git autoconf automake nasm mtools llvm clang lld github-cli gnupg
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +42,15 @@ jobs:
           echo 'builder ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Import the signing key
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -eu
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          fpr="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
+          echo "GPG_KEY_ID=$fpr" >>"$GITHUB_ENV"
+          echo "Signing as $fpr"
 
       - name: Build packages
         run: |
@@ -53,6 +65,14 @@ jobs:
           done
           ls -l /tmp/out
 
+      - name: Sign the packages
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -eu
+          for pkg in /tmp/out/*.pkg.tar.zst; do
+            gpg --batch --yes --detach-sign --no-armor -u "$GPG_KEY_ID" "$pkg"
+          done
+
       - name: Update the repository database
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,6 +80,7 @@ jobs:
           set -eu
           mkdir -p /tmp/repo
           cp /tmp/out/*.pkg.tar.zst /tmp/repo/
+          cp /tmp/out/*.pkg.tar.zst.sig /tmp/repo/ 2>/dev/null || true
 
           # Carry the published database forward rather than rebuilding it, so
           # that packages this run did not build keep their entries. Their
@@ -69,13 +90,26 @@ jobs:
             --pattern "$REPO_NAME.db.tar.gz" \
             --pattern "$REPO_NAME.files.tar.gz" || true
 
-          repo-add "/tmp/repo/$REPO_NAME.db.tar.gz" /tmp/repo/*.pkg.tar.zst
+          if [ -n "${GPG_KEY_ID:-}" ]; then
+            repo-add --sign --key "$GPG_KEY_ID" \
+              "/tmp/repo/$REPO_NAME.db.tar.gz" /tmp/repo/*.pkg.tar.zst
+            gpg --export --armor "$GPG_KEY_ID" >"/tmp/repo/$REPO_NAME.asc"
+          else
+            repo-add "/tmp/repo/$REPO_NAME.db.tar.gz" /tmp/repo/*.pkg.tar.zst
+          fi
 
-          # repo-add leaves .db and .files as symlinks to the tarballs, and a
-          # release asset cannot be a symlink, so publish copies instead.
-          rm -f "/tmp/repo/$REPO_NAME.db" "/tmp/repo/$REPO_NAME.files"
-          cp "/tmp/repo/$REPO_NAME.db.tar.gz" "/tmp/repo/$REPO_NAME.db"
-          cp "/tmp/repo/$REPO_NAME.files.tar.gz" "/tmp/repo/$REPO_NAME.files"
+          # repo-add leaves .db and .files (and their signatures) as symlinks
+          # to the tarballs, and a release asset cannot be a symlink, so
+          # publish copies instead.
+          for suffix in '' .sig; do
+            for name in db files; do
+              rm -f "/tmp/repo/$REPO_NAME.$name$suffix"
+              if [ -e "/tmp/repo/$REPO_NAME.$name.tar.gz$suffix" ]; then
+                cp "/tmp/repo/$REPO_NAME.$name.tar.gz$suffix" \
+                   "/tmp/repo/$REPO_NAME.$name$suffix"
+              fi
+            done
+          done
 
           ls -l /tmp/repo
 

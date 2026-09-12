@@ -1,0 +1,10 @@
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/share/limine/*
+
+[Action]
+Description = Copying Limine to the ESP...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/limine-esp-sync
