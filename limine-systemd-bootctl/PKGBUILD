@@ -30,7 +30,7 @@ source=("git+${url}.git#tag=${_tag}"
         'limine-esp-sync.conf.example')
 sha256sums=('SKIP'
             '78a51bea648d1ea6893ef2317a0b4872b147034006b51cdb91983233099ac360'
-            'e062191935e9684011c9f55edb3f69523fa9604465fa9abfea04e22f2cc0fa57'
+            '6ba02540b92938444158b66b81cd2a689c30e94aef9d84dd9528fc81076ae90c'
             'f4cc257e1701bc060fcc6f8bca45b1ac89f203d23b1bef1c6dccc1dc351c6860')
 
 pkgver() {
