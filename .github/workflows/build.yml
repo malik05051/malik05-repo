@@ -23,6 +23,12 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
 
+    # The rename below needs bash parameter substitution; without this a
+    # container job runs each step under sh.
+    defaults:
+      run:
+        shell: bash
+
     steps:
       - name: Install dependencies
         run: |
@@ -61,6 +67,22 @@ jobs:
             echo "::endgroup::"
           done
           ls -l /tmp/out
+
+      - name: Make the filenames URL-safe
+        run: |
+          set -eu
+          # makepkg spells an epoch with a colon, which GitHub silently
+          # rewrites to a dot in a release asset name. repo-add would then
+          # record a FILENAME that does not exist at the other end and every
+          # download would 404, so the colon goes before anything reads the
+          # name. pacman only ever uses FILENAME as a URL, so it need not
+          # match the canonical package name.
+          for pkg in /tmp/out/*:*; do
+            [ -e "$pkg" ] || continue
+            safe="${pkg//:/.}"
+            mv "$pkg" "$safe"
+            echo "renamed $(basename "$pkg") -> $(basename "$safe")"
+          done
 
       - name: Sign the packages
         if: env.GPG_PRIVATE_KEY != ''
