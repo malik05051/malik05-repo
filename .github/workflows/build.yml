@@ -1,0 +1,91 @@
+name: Build and publish packages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # The PKGBUILDs track git branches, so rebuild weekly to pick up commits.
+    - cron: '0 4 * * 0'
+
+permissions:
+  contents: write
+
+env:
+  # pacman.conf [section] name, and the basename of the database files.
+  REPO_NAME: malik05
+  # Fixed release the packages and database are published under.
+  RELEASE_TAG: repo
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git autoconf automake nasm mtools llvm clang lld github-cli
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # makepkg refuses to run as root.
+      - name: Create build user
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build packages
+        run: |
+          set -eu
+          mkdir -p /tmp/out
+          chown builder:builder /tmp/out
+          for pkgbuild in */PKGBUILD; do
+            dir="$(dirname "$pkgbuild")"
+            echo "::group::$dir"
+            ( cd "$dir" && sudo -u builder PKGDEST=/tmp/out makepkg -s --noconfirm --needed )
+            echo "::endgroup::"
+          done
+          ls -l /tmp/out
+
+      - name: Update the repository database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p /tmp/repo
+          cp /tmp/out/*.pkg.tar.zst /tmp/repo/
+
+          # Carry the published database forward rather than rebuilding it, so
+          # that packages this run did not build keep their entries. Their
+          # files stay in the release untouched, which is what those entries
+          # point at. Absent on the very first run.
+          gh release download "$RELEASE_TAG" --dir /tmp/repo \
+            --pattern "$REPO_NAME.db.tar.gz" \
+            --pattern "$REPO_NAME.files.tar.gz" || true
+
+          repo-add "/tmp/repo/$REPO_NAME.db.tar.gz" /tmp/repo/*.pkg.tar.zst
+
+          # repo-add leaves .db and .files as symlinks to the tarballs, and a
+          # release asset cannot be a symlink, so publish copies instead.
+          rm -f "/tmp/repo/$REPO_NAME.db" "/tmp/repo/$REPO_NAME.files"
+          cp "/tmp/repo/$REPO_NAME.db.tar.gz" "/tmp/repo/$REPO_NAME.db"
+          cp "/tmp/repo/$REPO_NAME.files.tar.gz" "/tmp/repo/$REPO_NAME.files"
+
+          ls -l /tmp/repo
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" \
+              --title "Package repository" \
+              --notes "Built by CI. Add this repository as described in the README."
+          gh release upload "$RELEASE_TAG" /tmp/repo/* --clobber

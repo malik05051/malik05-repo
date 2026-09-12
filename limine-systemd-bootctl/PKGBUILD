@@ -1,0 +1,62 @@
+# Maintainer: malik05051 <belhajjimalik1@gmail.com>
+
+_pkgname=Limine-systemd-bootctl
+_branch=v12.x
+
+# Upstream Limine release the fork currently sits on. Bump this when the fork
+# rebases onto a newer one, so the package keeps sorting above Arch's limine.
+_baseversion=12.9.0
+
+pkgname=limine-systemd-bootctl
+pkgver=${_baseversion}
+pkgrel=1
+pkgdesc='Limine bootloader with systemd Boot Loader Interface support'
+arch=('x86_64')
+url='https://github.com/malik05051/Limine-systemd-bootctl'
+license=('BSD-2-Clause')
+depends=('glibc')
+makedepends=('git' 'autoconf' 'automake' 'nasm' 'mtools' 'llvm' 'clang' 'lld')
+provides=('limine')
+conflicts=('limine')
+# The EFI and BIOS blobs are firmware images, not host executables; leave them
+# exactly as the build produced them.
+options=('!strip' '!debug')
+source=("git+${url}.git#branch=${_branch}")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${_pkgname}"
+
+    # The fork carries no tags of its own, so the upstream release it is based
+    # on is spelt out above and the fork's own commits count from there.
+    printf '%s.r%s.g%s' "${_baseversion}" \
+        "$(git rev-list --count HEAD)" \
+        "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "${_pkgname}"
+
+    # Fetches the vendored dependencies listed in 3RDPARTY.md and generates
+    # the configure script; needs network access.
+    ./bootstrap
+}
+
+build() {
+    cd "${_pkgname}"
+
+    # Left to itself configure picks clang, ld.lld and the llvm- binutils,
+    # which is the toolchain the tree cross-compiles every port with. Naming
+    # one explicitly means naming a prefix, which is not what is wanted here.
+    ./configure \
+        --prefix=/usr \
+        --enable-all
+
+    make
+}
+
+package() {
+    cd "${_pkgname}"
+
+    make DESTDIR="${pkgdir}" install
+}
