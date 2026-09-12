@@ -9,13 +9,30 @@ A pacman repository, built by CI and published through GitHub Releases.
 
 ## Using the repository
 
-Add this to the end of `/etc/pacman.conf`:
+The packages and the database are signed. Import the key once, and tell
+pacman you trust it:
+
+```console
+$ curl -LO https://github.com/malik05051/malik05-repo/releases/download/repo/malik05.asc
+# pacman-key --add malik05.asc
+# pacman-key --lsign-key 9EB820E32291639E0E8A8516B6B763F6A4C101F8
+```
+
+`--lsign-key` is the step that makes the key trusted; without it pacman
+rejects every package as coming from an unknown signer.
+
+Then add this to the end of `/etc/pacman.conf`:
 
 ```ini
 [malik05]
-SigLevel = Optional TrustAll
+SigLevel = Required
 Server = https://github.com/malik05051/malik05-repo/releases/download/repo
 ```
+
+Arch's shipped `pacman.conf` already sets `SigLevel = Required
+DatabaseOptional` globally, so the line can be left out entirely to inherit
+that instead. Do not use `Optional` or `TrustAll` here: both tell pacman to
+install whatever the release holds without checking who produced it.
 
 Then:
 
@@ -31,11 +48,6 @@ The release also still carries the older `arab.db`, which indexes the
 `systemd-arab-edition` packages alone. It is left in place so that anyone
 already pointing pacman at `[arab]` keeps working; `[malik05]` supersedes it
 and indexes everything.
-
-> **`SigLevel = Optional TrustAll` is only correct while the packages are
-> unsigned.** It tells pacman to install whatever the release holds without
-> checking who produced it. Once signing is switched on (below), change that
-> line to `SigLevel = Required` and import the key.
 
 ## How packages are built
 
@@ -94,38 +106,29 @@ rather than leaving you with an image the firmware will refuse.
 
 ## Signing the packages
 
-Signing is off until the `GPG_PRIVATE_KEY` secret exists; both workflows check
-for it and publish unsigned otherwise. To turn it on:
+Every package and the database are signed by
+`9EB820E32291639E0E8A8516B6B763F6A4C101F8`, whose armoured private key lives in
+the repository's `GPG_PRIVATE_KEY` secret. The key carries no passphrase,
+because the workflows run unattended; the secret is what protects it.
 
-1. Generate a signing key. Give it **no passphrase** — the workflows run
-   unattended, and the repository secret is what protects it:
-
-   ```console
-   $ gpg --quick-generate-key 'malik05 repository <you@example.com>' \
-       default default never
-   $ gpg --export-secret-keys --armor <fingerprint>
-   ```
-
-2. Put that armoured private key in the repository's
-   `GPG_PRIVATE_KEY` secret (Settings -> Secrets and variables -> Actions).
-
-3. Run **Reindex the repository database** from the Actions tab. It signs every
-   package that has no signature yet, including any uploaded by hand, signs the
-   database, and publishes the public key as `malik05.asc` beside it.
-
-Users then import the key once and tighten `SigLevel`:
+Both workflows check for that secret and publish unsigned if it is missing, so
+signing fails open rather than breaking a build. A green run therefore does not
+prove anything was signed; the release itself does:
 
 ```console
-$ curl -LO https://github.com/malik05051/malik05-repo/releases/download/repo/malik05.asc
-# pacman-key --add malik05.asc
-# pacman-key --lsign-key <fingerprint>
+$ gpg --verify malik05.db.sig malik05.db
 ```
 
-```ini
-[malik05]
-SigLevel = Required
-Server = https://github.com/malik05051/malik05-repo/releases/download/repo
-```
+**Reindex the repository database** signs every package that has no signature
+yet, including any uploaded by hand, signs the database, and publishes the
+public key as `malik05.asc` beside it. Run it from the Actions tab after
+uploading a package by hand, or after replacing the key.
 
-If the key is ever exposed, revoke it, delete the secret, generate a new one
-and run the reindex again; every signature in the release is replaced.
+`repo-add` no longer records package signatures inside the database, so pacman
+fetches `<package>.sig` from the release. Both are published for every package;
+neither is any use without the other.
+
+To replace the key, generate a new one, put the armoured private key in
+`GPG_PRIVATE_KEY`, delete the old `.sig` assets from the release, and run the
+reindex; it re-signs everything that is missing a signature. Users then need to
+`pacman-key --add` and `--lsign-key` the new one.
