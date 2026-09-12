@@ -109,6 +109,36 @@ rename that reports success and leaves something else behind is how a machine
 ends up booting a loader nobody installed, so the hook checks rather than
 assumes, and fails the transaction if the two do not match.
 
+### Systems running limine-snapper-sync
+
+That check passes and the loader still reverts if something rewrites the ESP
+after pacman has finished. `limine-snapper-sync` restores its own backup of the
+loader on every snapshot, and that backup is only refreshed by
+`limine-install`. Writing the ESP directly leaves the backup describing an
+older loader, which the next snapshot then reinstates.
+
+Where both are installed, let `limine-install` own the ESP. Empty `TARGETS` in
+`/etc/limine-esp-sync.conf` so this hook stands down, and add a hook of your
+own to run the other tool, whose own trigger only matches a package literally
+named `limine`:
+
+```ini
+# /etc/pacman.d/hooks/96-limine-systemd-bootctl.hook
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/share/limine/*
+
+[Action]
+Description = Deploying Limine to the ESP...
+When = PostTransaction
+Exec = /usr/bin/limine-install
+```
+
+Run `limine-install` once by hand afterwards: until it does, the stale backup
+is still there waiting for the next snapshot.
+
 ## Signing the packages
 
 Every package and the database are signed by
