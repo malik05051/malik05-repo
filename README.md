@@ -2,9 +2,10 @@
 
 A pacman repository, built by CI and published through GitHub Releases.
 
-| Package | Description |
-| --- | --- |
-| [`limine-systemd-bootctl`](limine-systemd-bootctl/) | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
+| Package | Built from | Description |
+| --- | --- | --- |
+| [`limine-systemd-bootctl`](limine-systemd-bootctl/) | this repository | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
+| `systemd-arab-edition` and friends | uploaded by hand | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
 
 ## Using the repository
 
@@ -25,6 +26,11 @@ Then:
 `limine-systemd-bootctl` sets `conflicts=('limine')`, so pacman will offer to
 replace Arch's `limine` if it is installed. Both ship the same paths
 (`/usr/bin/limine`, `/usr/share/limine/`), so nothing else needs changing.
+
+The release also still carries the older `arab.db`, which indexes the
+`systemd-arab-edition` packages alone. It is left in place so that anyone
+already pointing pacman at `[arab]` keeps working; `[malik05]` supersedes it
+and indexes everything.
 
 > **The packages are not signed.** `SigLevel = Optional TrustAll` tells pacman
 > to install them anyway. Transport is HTTPS, so this is not about
@@ -51,6 +57,12 @@ because `repo-add` makes them symlinks and a release asset cannot be one.
 
 The PKGBUILDs track git branches rather than tags, which is why the weekly
 rebuild exists: it picks up commits made to those branches since the last run.
+
+Packages uploaded to the release by hand are not indexed by that workflow,
+which only sees what it built. Run **Reindex the repository database**
+([`.github/workflows/reindex.yml`](.github/workflows/reindex.yml)) from the
+Actions tab after such an upload: it rebuilds the database from every package
+in the release, keeping the newest version of each.
 
 ## Adding a package
 

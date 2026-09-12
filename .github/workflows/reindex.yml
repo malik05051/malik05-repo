@@ -1,0 +1,79 @@
+name: Reindex the repository database
+
+# Rebuilds the database from every package published in the release, rather
+# than from the packages one build happened to produce. Run it after adding
+# packages to the release by hand, or to recover a database that has drifted.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  REPO_NAME: malik05
+  RELEASE_TAG: repo
+
+jobs:
+  reindex:
+    name: Reindex
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed github-cli
+
+      - name: Fetch the published packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          mkdir -p /tmp/pkgs
+          gh release download "$RELEASE_TAG" --dir /tmp/pkgs --pattern '*.pkg.tar.zst'
+          ls -l /tmp/pkgs
+
+      - name: Rebuild the database
+        run: |
+          set -eu
+          mkdir -p /tmp/repo
+
+          # Superseded versions stay in the release as assets, so index only
+          # the newest of each package name. pkgname is read out of .PKGINFO
+          # because a filename cannot be split reliably: plenty of package
+          # names contain the dash the fields are separated by.
+          declare -A newest
+          for pkg in /tmp/pkgs/*.pkg.tar.zst; do
+            info="$(bsdtar -xOqf "$pkg" .PKGINFO)"
+            name="$(awk -F' = ' '$1 == "pkgname" { print $2 }' <<<"$info")"
+            ver="$(awk -F' = ' '$1 == "pkgver" { print $2 }' <<<"$info")"
+            if [ -z "${newest[$name]:-}" ] \
+            || [ "$(vercmp "$ver" "${newest[$name]%%|*}")" -gt 0 ]; then
+              newest[$name]="$ver|$pkg"
+            fi
+          done
+
+          keep=()
+          for name in "${!newest[@]}"; do
+            echo "indexing $name ${newest[$name]%%|*}"
+            keep+=("${newest[$name]#*|}")
+          done
+
+          repo-add "/tmp/repo/$REPO_NAME.db.tar.gz" "${keep[@]}"
+
+          # repo-add leaves .db and .files as symlinks to the tarballs, and a
+          # release asset cannot be a symlink, so publish copies instead.
+          rm -f "/tmp/repo/$REPO_NAME.db" "/tmp/repo/$REPO_NAME.files"
+          cp "/tmp/repo/$REPO_NAME.db.tar.gz" "/tmp/repo/$REPO_NAME.db"
+          cp "/tmp/repo/$REPO_NAME.files.tar.gz" "/tmp/repo/$REPO_NAME.files"
+
+      - name: Publish the database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release upload "$RELEASE_TAG" \
+            "/tmp/repo/$REPO_NAME.db" \
+            "/tmp/repo/$REPO_NAME.db.tar.gz" \
+            "/tmp/repo/$REPO_NAME.files" \
+            "/tmp/repo/$REPO_NAME.files.tar.gz" \
+            --clobber
