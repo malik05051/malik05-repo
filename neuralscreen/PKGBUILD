@@ -84,7 +84,15 @@ check() {
     export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
     local failed=0
     for test in test_*.py; do
-        python "$test" >/dev/null 2>&1 || { echo "FAIL $test"; failed=1; }
+        # The output is kept and printed only when the test fails. A check()
+        # that reports nothing but a name is no use from a build log, which
+        # is the one place the failure can be read.
+        if ! python "$test" >"${srcdir}/check.log" 2>&1; then
+            echo "--- FAIL $test ---"
+            cat "${srcdir}/check.log"
+            echo "--- end $test ---"
+            failed=1
+        fi
     done
     return "$failed"
 }
