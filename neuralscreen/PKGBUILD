@@ -7,7 +7,7 @@ _branch=claude/linux-wayland-compat-dqotxx
 
 pkgname=neuralscreen
 pkgver=1.8.2.r2.gf7d86fa
-pkgrel=1
+pkgrel=2
 pkgdesc="NVIDIA's DLSS 5 neural renderer applied to the whole Wayland desktop"
 arch=('x86_64')
 url='https://github.com/malik05051/DLSS5-NeuralScreen-Linux'
