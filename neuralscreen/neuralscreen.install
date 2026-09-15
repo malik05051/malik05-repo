@@ -1,0 +1,42 @@
+# The one thing this package cannot do for you, said at the moment it
+# becomes relevant. NVIDIA's neural renderer runtime is not redistributable,
+# so no repository can ship it, and without it the program starts and the
+# picture is never processed - which is a worse failure than not starting.
+
+post_install() {
+    cat <<'EOF'
+
+NeuralScreen needs two things this package cannot provide:
+
+ 1. NVIDIA's neural renderer runtime. Put your copy of nvngx_dlssnr.so at
+
+        ~/.local/share/neuralscreen/nvngx_dlssnr.so
+
+    (or point NS_NR_DLL at it). It is not redistributable, which is why it
+    is not in here.
+
+ 2. A Wayland session on an RTX 50 card. NGX refuses the feature on
+    anything below Blackwell; the menu's GPU dot goes green only when the
+    worker really created it.
+
+Run it with:  neuralscreen
+Diagnostics:  neuralscreen --diag     (then attach NeuralScreen.log)
+
+The first launch asks once for the screen to capture and once for the
+hotkeys - that is the Wayland security model, and the answers are
+remembered.
+
+Notes for your desktop:
+  GNOME      the overlay is an ordinary window (no layer-shell in Mutter),
+             and the tray icon needs the AppIndicator extension
+  wlroots    xdg-desktop-portal-wlr ships no global shortcuts; join the
+             'input' group for the direct fallback
+
+/usr/share/doc/neuralscreen/README.md has the rest.
+
+EOF
+}
+
+post_upgrade() {
+    post_install
+}

@@ -1,0 +1,210 @@
+# Maintainer: malik05051 <belhajjimalik1@gmail.com>
+
+_pkgname=DLSS5-NeuralScreen-Linux
+# The Wayland port lives on this branch until it is merged; main is still the
+# Windows program and would not build here.
+_branch=claude/linux-wayland-compat-dqotxx
+
+pkgname=neuralscreen
+pkgver=1.8.2.r2.gf7d86fa
+pkgrel=1
+pkgdesc="NVIDIA's DLSS 5 neural renderer applied to the whole Wayland desktop"
+arch=('x86_64')
+url='https://github.com/malik05051/DLSS5-NeuralScreen-Linux'
+license=('MIT')
+
+# The Python half. cv2 is python-opencv; every other name is the module's
+# own. libpulse and nvidia-utils are dlopen'd rather than linked (audio.py
+# and gpuinfo.py), so they are dependencies the linker cannot tell you
+# about.
+depends=('python'
+         'python-numpy'
+         'python-opencv'
+         'python-pygame'
+         'python-av'
+         'python-pillow'
+         'python-jeepney'
+         'python-pywayland'
+         'libpipewire'
+         'libpulse'
+         'libxkbcommon'
+         'vulkan-icd-loader'
+         'nvidia-utils'
+         'xdg-desktop-portal')
+
+makedepends=('git' 'gcc' 'pkgconf' 'vulkan-headers' 'pipewire')
+
+optdepends=(
+    'xdg-desktop-portal-hyprland: screen capture and global shortcuts on Hyprland'
+    'xdg-desktop-portal-wlr: screen capture on wlroots compositors'
+    'xdg-desktop-portal-kde: screen capture and global shortcuts on KDE'
+    'gst-plugin-pipewire: the Python-side capture fallback (capture_in_worker off)'
+    'python-gobject: the same fallback needs GStreamer bindings'
+    'gnome-shell-extension-appindicator: tray icon on GNOME'
+)
+
+# A mostly-Python package with one small C++ binary: a debug package for it
+# is noise, and the worker is a plain ELF that strips fine.
+options=('!debug')
+
+install="${pkgname}.install"
+
+source=("git+${url}.git#branch=${_branch}")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${_pkgname}"
+
+    # The program shows its own version in the menu header and settings_io.py
+    # is where that number lives, so it is read from there rather than
+    # written out again here - two copies of a version drift.
+    local appver
+    appver="$(sed -n 's/^APP_VERSION = "\([^"]*\)"/\1/p' settings_io.py)"
+    printf '%s.r%s.g%s' "${appver:-0}" \
+        "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd "${_pkgname}/native/linux"
+
+    # Builds neuralscreen-host: Vulkan + NGX + PipeWire. NGX is not a build
+    # dependency - its headers travel with the source and the runtime is
+    # resolved with dlsym at load time - which is why this needs no NVIDIA
+    # developer account to compile.
+    ./build-host.sh
+}
+
+check() {
+    cd "${_pkgname}/tests"
+
+    # The suite gates whatever needs a GPU, a compositor or NVENC and skips
+    # it (tests/_needs.py), so what runs in a build chroot is the part that
+    # can mean anything there. SDL must not try to open a window or a sound
+    # card while it does.
+    export SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
+    local failed=0
+    for test in test_*.py; do
+        python "$test" >/dev/null 2>&1 || { echo "FAIL $test"; failed=1; }
+    done
+    return "$failed"
+}
+
+package() {
+    cd "${_pkgname}"
+
+    local share="${pkgdir}/usr/share/${pkgname}"
+
+    # The Python sources keep their layout: paths.py resolves everything
+    # relative to main.py, so the tree moves as a whole or not at all.
+    install -dm0755 "${share}"
+    install -Dm0644 -t "${share}" *.py config.json
+    install -Dm0644 -t "${share}/fonts" fonts/*.ttf fonts/OFL.txt
+
+    # wlproto.py generates the layer-shell bindings from this XML the first
+    # time the overlay comes up. Without it the overlay silently falls back
+    # to an xdg-shell window that cannot be click-through, so it is program
+    # data and not source.
+    install -Dm0644 -t "${share}/native/protocols" \
+        native/protocols/wlr-layer-shell-unstable-v1.xml
+
+    install -Dm0755 native/linux/neuralscreen-host \
+        "${share}/native/linux/neuralscreen-host"
+
+    # Nothing from tests/, and neither release helper: the package is what
+    # the program needs to run.
+    rm -f "${share}"/build_release.py "${share}"/verify_github.py
+
+    install -Dm0644 native/neuralscreen.png \
+        "${pkgdir}/usr/share/icons/hicolor/256x256/apps/${pkgname}.png"
+
+    install -Dm0644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    install -Dm0644 -t "${pkgdir}/usr/share/doc/${pkgname}" \
+        README.md README.ru.md TECHNICAL.md TECHNICAL.ru.md docs/HDR.md
+
+    # The wrapper and the desktop entry are generated here rather than
+    # shipped as source files because every path in them is a path this
+    # PKGBUILD chose. Keeping them here keeps those paths in one place.
+    #
+    # What the wrapper is for: upstream's neuralscreen.sh builds the worker
+    # on first run and expects NVIDIA's runtime to sit inside its own
+    # directory. Neither applies to a packaged install - the worker is
+    # already built, and /usr/share is read-only - so this goes straight to
+    # main.py with the two things it needs pointed at the user's own copy.
+    install -dm0755 "${pkgdir}/usr/bin"
+    cat >"${pkgdir}/usr/bin/${pkgname}" <<'WRAPPER'
+#!/usr/bin/env bash
+# NeuralScreen, as installed by the neuralscreen package.
+set -uo pipefail
+
+share=/usr/share/neuralscreen
+
+die() {
+    printf '[NeuralScreen] %s\n' "$*" >&2
+    # Launched from the application menu there is no terminal, and a
+    # notification is the only way the reason ever reaches the user.
+    if [[ ! -t 2 ]] && command -v notify-send >/dev/null 2>&1; then
+        notify-send --icon=neuralscreen --urgency=critical \
+            "NeuralScreen did not start" "$*"
+    fi
+    exit 1
+}
+
+case "${1:-}" in
+--uninstall)
+    # Only the two things the program writes outside the package.
+    rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/neuralscreen.desktop" \
+          "${XDG_DATA_HOME:-$HOME/.local/share}/applications/neuralscreen.desktop"
+    echo "[NeuralScreen] autostart and the user desktop entry removed"
+    echo "[NeuralScreen] the package itself: pacman -R neuralscreen"
+    exit 0
+    ;;
+esac
+
+if [[ "${XDG_SESSION_TYPE:-}" != "wayland" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    die "this is a Wayland program and there is no Wayland session here
+(WAYLAND_DISPLAY is not set). Log in to a Wayland session and try again."
+fi
+
+# NVIDIA's neural renderer runtime. It is not redistributable, so no package
+# can ship it and the user supplies their own copy. NGX loads it out of the
+# directory NS_NR_DLL names.
+runtime="${NS_NR_DLL:-${XDG_DATA_HOME:-$HOME/.local/share}/neuralscreen/nvngx_dlssnr.so}"
+if [[ ! -f "$runtime" ]]; then
+    die "NVIDIA's neural renderer runtime is missing. Put your copy of
+nvngx_dlssnr.so at
+  ${XDG_DATA_HOME:-$HOME/.local/share}/neuralscreen/nvngx_dlssnr.so
+or point NS_NR_DLL at it. See /usr/share/doc/neuralscreen/README.md."
+fi
+export NS_NR_DLL="$runtime"
+
+# Autostart written from the menu has to point at this wrapper, not at the
+# read-only copy of upstream's launcher inside the package.
+export NEURALSCREEN_LAUNCHER=/usr/bin/neuralscreen
+
+if [[ "${1:-}" == "--diag" ]]; then
+    # The worker's phase profiler: the log then carries [phase]/[host] lines
+    # saying where each frame went. This is what a bug report should attach.
+    export NS_PHASE=1
+    shift
+fi
+
+exec python "$share/main.py" "$@"
+WRAPPER
+    chmod 0755 "${pkgdir}/usr/bin/${pkgname}"
+
+    install -dm0755 "${pkgdir}/usr/share/applications"
+    cat >"${pkgdir}/usr/share/applications/${pkgname}.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=NeuralScreen
+GenericName=Neural desktop renderer
+Comment=Run the whole desktop through NVIDIA's DLSS 5 neural renderer
+Exec=/usr/bin/neuralscreen
+Icon=neuralscreen
+Terminal=false
+Categories=Graphics;Utility;
+StartupNotify=false
+StartupWMClass=neuralscreen
+X-GNOME-UsesNotifications=false
+DESKTOP
+}
