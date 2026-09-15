@@ -105,7 +105,15 @@ package() {
     # The Python sources keep their layout: paths.py resolves everything
     # relative to main.py, so the tree moves as a whole or not at all.
     install -dm0755 "${share}"
-    install -Dm0644 -t "${share}" *.py config.json
+    install -Dm0644 -t "${share}" *.py
+
+    # config.json is installed as a template and NOT beside main.py.
+    # paths.config_path() prefers a config.json next to the program - which
+    # is right for the unpacked archive and wrong here, because it would pin
+    # the settings to a read-only file and every change would fail to save.
+    # With none there it falls through to ~/.config/neuralscreen, and the
+    # wrapper seeds that from this template on first run.
+    install -Dm0644 config.json "${share}/config.json.default"
     install -Dm0644 -t "${share}/fonts" fonts/*.ttf fonts/OFL.txt
 
     # wlproto.py generates the layer-shell bindings from this XML the first
@@ -178,6 +186,17 @@ esac
 if [[ "${XDG_SESSION_TYPE:-}" != "wayland" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     die "this is a Wayland program and there is no Wayland session here
 (WAYLAND_DISPLAY is not set). Log in to a Wayland session and try again."
+fi
+
+# Seed the user's settings from the package's template. load_config expects
+# the file to be there and complete, so the first run has to find one; after
+# this the file is the user's and the package never touches it again.
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/neuralscreen"
+if [[ ! -f "$config_dir/config.json" ]]; then
+    mkdir -p "$config_dir"
+    cp -n "$share/config.json.default" "$config_dir/config.json" || \
+        die "could not write $config_dir/config.json"
+    echo "[NeuralScreen] settings created at $config_dir/config.json"
 fi
 
 # NVIDIA's neural renderer runtime. It is not redistributable, so no package
