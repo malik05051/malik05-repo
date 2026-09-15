@@ -29,7 +29,9 @@ NeuralScreen needs two things this package cannot provide:
     '[spoof]' to see what happened.
 
 Run it with:  neuralscreen
-Diagnostics:  neuralscreen --diag     (then attach NeuralScreen.log)
+Diagnostics:  neuralscreen --diag
+              then attach ~/.local/state/neuralscreen/NeuralScreen.log
+Settings:     ~/.config/neuralscreen/config.json
 
 The first launch asks once for the screen to capture and once for the
 hotkeys - that is the Wayland security model, and the answers are
