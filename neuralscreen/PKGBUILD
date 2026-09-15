@@ -118,6 +118,13 @@ package() {
     install -Dm0755 native/linux/neuralscreen-host \
         "${share}/native/linux/neuralscreen-host"
 
+    # The architecture shim, beside the worker because that is where
+    # pipeline.py looks for it. It is put in the worker's LD_PRELOAD only on
+    # a card below Blackwell that the runtime carries kernels for, and in
+    # nothing else's - a 50-series user has the file and never loads it.
+    install -Dm0755 native/linux/libns-archspoof.so \
+        "${share}/native/linux/libns-archspoof.so"
+
     # Nothing from tests/, and neither release helper: the package is what
     # the program needs to run.
     rm -f "${share}"/build_release.py "${share}"/verify_github.py

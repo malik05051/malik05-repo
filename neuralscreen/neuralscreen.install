@@ -15,9 +15,18 @@ NeuralScreen needs two things this package cannot provide:
     (or point NS_NR_DLL at it). It is not redistributable, which is why it
     is not in here.
 
- 2. A Wayland session on an RTX 50 card. NGX refuses the feature on
-    anything below Blackwell; the menu's GPU dot goes green only when the
-    worker really created it.
+ 2. A Wayland session, and an NVIDIA RTX card.
+
+    On an RTX 50 this is known to work. Below that, NGX refuses the
+    feature - a version check, not missing kernels - and the program
+    automatically loads a shim that answers the check differently on a
+    card the runtime has kernels for (RTX 20/30/40). Nobody has confirmed
+    that working on Linux yet, so treat it as worth trying, not as a
+    promise. NS_ARCH_SPOOF=0 turns it off.
+
+    Either way the menu's GPU dot is the honest answer: it goes green
+    only when the worker really created the feature. Grep the log for
+    '[spoof]' to see what happened.
 
 Run it with:  neuralscreen
 Diagnostics:  neuralscreen --diag     (then attach NeuralScreen.log)
