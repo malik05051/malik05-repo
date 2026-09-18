@@ -1,32 +1,37 @@
-# The one thing this package cannot do for you, said at the moment it
-# becomes relevant. NVIDIA's neural renderer runtime is not redistributable,
+# The two things this package cannot do for you, said at the moment they
+# become relevant. NVIDIA's neural renderer runtime is not redistributable,
 # so no repository can ship it, and without it the program starts and the
-# picture is never processed - which is a worse failure than not starting.
+# picture is never processed - a worse failure than not starting.
 
 post_install() {
-    cat <<'EOF'
+    cat <<'EOT'
 
 NeuralScreen needs two things this package cannot provide:
 
- 1. NVIDIA's neural renderer runtime. Put your copy of nvngx_dlssnr.so at
+ 1. NVIDIA's neural renderer runtime, nvngx_dlssnr.dll. Put your copy at
 
-        ~/.local/share/neuralscreen/nvngx_dlssnr.so
+        ~/.local/share/neuralscreen/nvngx_dlssnr.dll
 
-    (or point NS_NR_DLL at it). It is not redistributable, which is why it
-    is not in here.
+    (or point NS_NR_DLL at it), then run once:
+
+        neuralscreen --setup
+
+    It is a Windows DLL and that is not a mistake: NVIDIA ships DLSSNR
+    only as D3D12, and there is no Linux snippet for it - not in the
+    driver, not on NVIDIA's OTA server. So it runs where it can, in a
+    Windows process under Proton, with vkd3d-proton and the same NVIDIA
+    driver underneath. --setup prepares that prefix once.
 
  2. A Wayland session, and an NVIDIA RTX card.
 
-    On an RTX 50 this is known to work. Below that, NGX refuses the
-    feature - a version check, not missing kernels - and the program
-    automatically loads a shim that answers the check differently on a
-    card the runtime has kernels for (RTX 20/30/40). Nobody has confirmed
-    that working on Linux yet, so treat it as worth trying, not as a
-    promise. NS_ARCH_SPOOF=0 turns it off.
+    Verified working on an RTX 3050 Laptop. NGX refuses the feature on
+    anything below Blackwell - a version check, not missing kernels - so
+    the program reports itself as a newer card to the check. The runtime
+    carries kernels for RTX 20/30/40, which is why this works at all.
+    NS_ARCH_SPOOF=0 turns it off.
 
-    Either way the menu's GPU dot is the honest answer: it goes green
-    only when the worker really created the feature. Grep the log for
-    '[spoof]' to see what happened.
+    The menu's GPU dot is the honest answer: green only when the worker
+    really created the feature. Grep the log for '[spoof]' and '[proton]'.
 
 Run it with:  neuralscreen
 Diagnostics:  neuralscreen --diag
@@ -34,10 +39,14 @@ Diagnostics:  neuralscreen --diag
 Settings:     ~/.config/neuralscreen/config.json
 
 The first launch asks once for the screen to capture and once for the
-hotkeys - that is the Wayland security model, and the answers are
-remembered.
+hotkeys - that is the Wayland security model. The screen-capture answer is
+remembered from then on.
 
 Notes for your desktop:
+  KDE        the overlay hides itself from screen capture, so it does not
+             re-process its own output. That also hides it from OBS and
+             from screenshots. Needs KWin 6.6 or newer; older KWin keeps
+             working and says so in the log.
   GNOME      the overlay is an ordinary window (no layer-shell in Mutter),
              and the tray icon needs the AppIndicator extension
   wlroots    xdg-desktop-portal-wlr ships no global shortcuts; join the
@@ -45,7 +54,7 @@ Notes for your desktop:
 
 /usr/share/doc/neuralscreen/README.md has the rest.
 
-EOF
+EOT
 }
 
 post_upgrade() {
