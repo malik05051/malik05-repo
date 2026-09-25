@@ -1,0 +1,11 @@
+[Unit]
+Description=Update Limine boot entries for Timeshift snapshots regularly
+
+[Timer]
+# Timeshift takes its boot snapshot about ten minutes after boot, and its
+# scheduled ones at most hourly.
+OnBootSec=15min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target

@@ -5,6 +5,7 @@ A pacman repository, built by CI and published through GitHub Releases.
 | Package | Built from | Description |
 | --- | --- | --- |
 | [`limine-systemd-bootctl`](limine-systemd-bootctl/) | this repository | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
+| [`limine-timeshift-sync`](limine-timeshift-sync/) | this repository | Lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with. |
 | `systemd-arab-edition` and friends | uploaded by hand | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
 
 ## Using the repository
@@ -138,6 +139,50 @@ Exec = /usr/bin/limine-install
 
 Run `limine-install` once by hand afterwards: until it does, the stale backup
 is still there waiting for the next snapshot.
+
+## Booting Timeshift snapshots
+
+`limine-timeshift-sync` keeps a `/Timeshift snapshots` entry in `limine.conf`
+with one sub-entry per snapshot, newest first. It needs Timeshift in btrfs
+mode, which in turn needs the `@` / `@home` subvolume layout.
+
+```console
+# pacman -S limine-timeshift-sync
+# limine-timeshift-sync --dry-run
+# systemctl enable --now limine-timeshift-sync.timer
+```
+
+`--dry-run` prints the entry it would write and changes nothing; run it first.
+After that, entries are kept current by two pacman hooks and an hourly timer.
+`limine-timeshift-sync --remove` takes the entry out again.
+
+**Kernels.** A snapshot captures `/usr/lib/modules` but not the kernel on the
+ESP, and booting it with a newer kernel leaves its modules unloadable. Each
+snapshot's kernel, initramfs and microcode are therefore copied to
+`limine_timeshift/` on the ESP, taken from the `limine.conf` entry that boots
+that kernel today, and the command line comes from the same entry with the
+root subvolume pointed at the snapshot. The pre-transaction hook runs after
+`timeshift-autosnap` and before a kernel upgrade removes the old kernel, so
+the snapshot taken just before an upgrade can still be booted after it.
+
+A snapshot taken before this package was installed can only be given an entry
+if its kernel is still on the ESP; otherwise it is skipped with a message.
+
+**Secure Boot.** Every path is pinned by its BLAKE2b hash, which Limine
+requires once a config hash is enrolled. If the loader is enrolled, the tool
+runs `limine-enroll-config` after changing `limine.conf`, then checks that the
+loader now accepts the file on disk. If it does not, the previous
+`limine.conf` is put back: a mismatch would make Limine refuse to boot at all.
+If enrolment is needed but `limine-enroll-config` is missing, nothing is
+changed.
+
+**limine-snapper-sync.** Both tools can run on one machine. They take the same
+lock before touching the ESP, and each leaves the other's entry alone. Running
+Timeshift and snapper on the same filesystem is still not advisable: both
+restore by replacing `@`, and neither knows about the other's snapshots.
+
+**Booting a snapshot.** Timeshift's snapshots are writable, so booting one
+changes it. Use it to recover, then restore properly with Timeshift.
 
 ## Signing the packages
 

@@ -1,0 +1,5 @@
+# Without this the entry outlives the package, pointing at kernels nothing will
+# ever clean up.
+pre_remove() {
+    /usr/bin/limine-timeshift-sync --remove || true
+}

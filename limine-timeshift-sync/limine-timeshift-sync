@@ -1,0 +1,482 @@
+#!/bin/bash
+# Keeps a "Timeshift snapshots" entry in limine.conf in step with the btrfs
+# snapshots Timeshift has taken, so any of them can be booted from the menu.
+#
+# Every kernel and initramfs a snapshot entry names is copied to the ESP and
+# pinned by its BLAKE2b hash. Limine refuses to boot anything unhashed once a
+# config hash is enrolled, and a snapshot's kernel has usually been replaced on
+# the ESP long before the snapshot is needed.
+
+set -euo pipefail
+
+readonly CONF=/etc/limine-timeshift-sync.conf
+# Shared with limine-snapper-sync, which rewrites the same limine.conf.
+readonly LOCK=/run/lock/boot-partition.lock
+readonly MARKER='comment: managed by limine-timeshift-sync, edits here are overwritten'
+readonly HISTORY_NAME=limine_timeshift
+readonly SIGNATURE='++CONFIG_B2SUM_SIGNATURE++'
+readonly ZERO_HASH=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+ESP_PATH="${ESP_PATH:-}"
+ENTRY_TITLE="${ENTRY_TITLE:-Timeshift snapshots}"
+MAX_SNAPSHOTS="${MAX_SNAPSHOTS:-10}"
+ESP_USAGE_LIMIT="${ESP_USAGE_LIMIT:-85}"
+ENROLL_COMMAND="${ENROLL_COMMAND:-limine-enroll-config}"
+
+DRY_RUN=0
+REMOVE=0
+
+usage() {
+    cat <<EOF
+Usage: limine-timeshift-sync [--dry-run] [--remove]
+
+  --dry-run   Show the entry that would be written and change nothing.
+  --remove    Take the Timeshift entry out of limine.conf and delete the
+              kernels kept for it.
+
+Settings are read from $CONF.
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        --remove) REMOVE=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+done
+
+if [ -r "$CONF" ]; then
+    # shellcheck source=/dev/null
+    . "$CONF"
+fi
+
+note() { echo "limine-timeshift-sync: $*"; }
+warn() { echo "limine-timeshift-sync: $*" >&2; }
+die() { warn "$*"; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "must be run as root"
+
+TOP=""
+MOUNTED=0
+WORK=""
+
+cleanup() {
+    if [ "$MOUNTED" -eq 1 ]; then
+        umount "$TOP" 2>/dev/null || umount -l "$TOP" 2>/dev/null || true
+        rmdir "$TOP" 2>/dev/null || true
+    fi
+    if [ -n "$WORK" ]; then
+        rm -rf "$WORK"
+    fi
+}
+trap cleanup EXIT
+
+# Limine searches these, in this order, relative to the partition it booted
+# from. The first one it finds is the one that has to stay correct.
+find_config() {
+    local esp=$1 rel
+    for rel in EFI/limine/limine.conf EFI/BOOT/limine.conf boot/limine/limine.conf \
+               boot/limine.conf limine/limine.conf limine.conf; do
+        if [ -f "$esp/$rel" ]; then
+            echo "$esp/$rel"
+            return 0
+        fi
+    done
+    return 1
+}
+
+find_esp() {
+    local dir
+    if [ -n "$ESP_PATH" ]; then
+        find_config "$ESP_PATH" >/dev/null || die "no limine.conf under ESP_PATH=$ESP_PATH"
+        echo "$ESP_PATH"
+        return 0
+    fi
+    for dir in /efi /boot /boot/efi; do
+        if mountpoint -q "$dir" && find_config "$dir" >/dev/null; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    die "could not find the partition holding limine.conf; set ESP_PATH in $CONF"
+}
+
+# The version a bzImage carries in its setup header. It survives the kernel
+# being signed on the ESP, which a file hash does not.
+kernel_version() {
+    local f=$1 off
+    off=$(od -An -tu2 -j $((0x20E)) -N2 "$f" 2>/dev/null | tr -d ' ')
+    [ -n "$off" ] && [ "$off" -gt 0 ] || return 1
+    dd if="$f" bs=1 skip=$((0x200 + off)) count=128 status=none 2>/dev/null \
+        | tr '\0' '\n' | head -n1 | cut -d' ' -f1
+}
+
+# Turn a Limine path into a file on the ESP. Only paths on the partition the
+# config came from can be followed; anything naming another device is skipped.
+resolve_path() {
+    local esp=$1 path=${2%%#*}
+    case "$path" in
+        boot\(\):*) path=${path#boot():} ;;
+        /*) ;;
+        *) return 1 ;;
+    esac
+    echo "$esp/${path#/}"
+}
+
+# One line per Linux-protocol entry: kernel path, command line and the module
+# paths joined by \x1f. Entries this tool wrote are left out.
+read_entries() {
+    local config=$1
+    awk -v marker="$MARKER" '
+        function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+        function expand(s,    k) {
+            for (k in macro) {
+                while (index(s, "${" k "}")) {
+                    i = index(s, "${" k "}")
+                    s = substr(s, 1, i - 1) macro[k] substr(s, i + length(k) + 3)
+                }
+            }
+            return s
+        }
+        function reset() { proto = ""; kpath = ""; cmd = ""; nmods = 0 }
+        function flush(    out, j) {
+            if (proto == "linux" && kpath != "") {
+                out = ""
+                for (j = 0; j < nmods; j++) out = out (j ? "\x1f" : "") mods[j]
+                print kpath "\t" cmd "\t" out
+            }
+            reset()
+        }
+        BEGIN { reset(); ours = 0 }
+        {
+            t = trim($0)
+            if (t == "" || substr(t, 1, 1) == "#") next
+            if (t ~ /^\$\{[A-Za-z0-9_]+\}=/) {
+                name = t; sub(/^\$\{/, "", name); sub(/\}=.*/, "", name)
+                val = t; sub(/^\$\{[A-Za-z0-9_]+\}=/, "", val)
+                macro[name] = val
+                next
+            }
+            if (substr(t, 1, 1) == "/") {
+                flush()
+                if (t !~ /^\/\//) ours = 0
+                next
+            }
+            if (t == marker) { ours = 1; next }
+            if (ours) next
+            c = index(t, ":")
+            if (!c) next
+            key = tolower(trim(substr(t, 1, c - 1)))
+            val = trim(substr(t, c + 1))
+            if (key == "protocol") proto = tolower(val)
+            else if (key == "kernel_path" || key == "path") kpath = expand(val)
+            else if (key == "module_path") mods[nmods++] = expand(val)
+            else if (key == "cmdline" || key == "kernel_cmdline") cmd = expand(val)
+        }
+        END { flush() }
+    ' "$config"
+}
+
+# The config with this tool's entry taken out, and no trailing blank lines.
+strip_ours() {
+    awk -v marker="$MARKER" '
+        function out() { if (inbuf && !drop) printf "%s", buf; buf = ""; inbuf = 0 }
+        {
+            t = $0; sub(/^[ \t]+/, "", t)
+            if (t ~ /^\/([^\/]|$)/) {
+                out(); buf = $0 "\n"; inbuf = 1; drop = 0; next
+            }
+            if (inbuf) {
+                buf = buf $0 "\n"
+                u = $0; sub(/^[ \t]+/, "", u); sub(/[ \t\r]+$/, "", u)
+                if (u == marker) drop = 1
+                next
+            }
+            print
+        }
+        END { out() }
+    ' "$1" | awk '{ lines[NR] = $0 } END { n = NR; while (n > 0 && lines[n] ~ /^[ \t\r]*$/) n--; for (i = 1; i <= n; i++) print lines[i] }'
+}
+
+# Point the root filesystem at a snapshot, keeping every other mount option.
+snapshot_cmdline() {
+    local subvol=$2 tok o kept out="" found=0
+    local -a toks opts
+    read -r -a toks <<<"$1"
+    for tok in "${toks[@]}"; do
+        if [ "${tok#rootflags=}" != "$tok" ]; then
+            IFS=, read -r -a opts <<<"${tok#rootflags=}"
+            kept=""
+            for o in "${opts[@]}"; do
+                case "$o" in
+                    subvol=*|subvolid=*) ;;
+                    *) kept="$kept,$o" ;;
+                esac
+            done
+            tok="rootflags=subvol=$subvol$kept"
+            found=1
+        fi
+        out="$out $tok"
+    done
+    if [ "$found" -eq 0 ]; then
+        out="$out rootflags=subvol=$subvol"
+    fi
+    echo "${out# }"
+}
+
+enrolled_hash() {
+    local h
+    h=$(grep -aoE "\+\+CONFIG_B2SUM_SIGNATURE\+\+[0-9a-fA-F]{128}" "$1" 2>/dev/null | head -n1) || true
+    h=${h#"$SIGNATURE"}
+    echo "$h" | tr 'A-F' 'a-f'
+}
+
+# Loaders on the ESP that carry an enrolled config hash, and so will refuse
+# any config that does not match it.
+enrolled_loaders() {
+    local esp=$1 f h
+    while IFS= read -r -d '' f; do
+        h=$(enrolled_hash "$f")
+        if [ -n "$h" ] && [ "$h" != "$ZERO_HASH" ]; then
+            printf '%s\n' "$f"
+        fi
+    done < <(find "$esp/EFI" -maxdepth 2 -type f -iname '*.efi' -print0 2>/dev/null)
+}
+
+b2() { b2sum "$1" | cut -d' ' -f1; }
+
+ESP=$(find_esp)
+CONFIG=$(find_config "$ESP")
+HISTORY="$ESP/$HISTORY_NAME"
+HISTORY_REL="/$HISTORY_NAME"
+WORK=$(mktemp -d /run/limine-timeshift-sync.work.XXXXXX)
+
+if [ "$DRY_RUN" -eq 0 ]; then
+    mkdir -p /run/lock
+    exec 200>"$LOCK"
+    flock --timeout 60 200 || die "timed out waiting for $LOCK"
+fi
+
+block="$WORK/block"
+: >"$block"
+declare -A keep=()
+
+if [ "$REMOVE" -eq 0 ]; then
+    if [ -n "${LIMINE_TIMESHIFT_TOP:-}" ]; then
+        TOP=$LIMINE_TIMESHIFT_TOP
+    else
+        [ "$(findmnt -no FSTYPE /)" = btrfs ] || die "/ is not on btrfs; Timeshift snapshots in btrfs mode need it"
+        src=$(findmnt -no SOURCE /)
+        dev=${src%%\[*}
+        TOP=$(mktemp -d /run/limine-timeshift-sync.top.XXXXXX)
+        mount -o ro,subvolid=5 "$dev" "$TOP"
+        MOUNTED=1
+    fi
+
+    snapdir="$TOP/timeshift-btrfs/snapshots"
+    entries="$WORK/entries"
+    read_entries "$CONFIG" >"$entries"
+
+    mapfile -t snapshots < <(
+        for d in "$snapdir"/*/@; do
+            [ -d "$d" ] && basename "$(dirname "$d")"
+        done | sort -r | head -n "$MAX_SNAPSHOTS"
+    )
+
+    if [ "${#snapshots[@]}" -eq 0 ]; then
+        note "no Timeshift btrfs snapshots under $snapdir"
+    fi
+
+    usage_now=$(df --output=pcent "$ESP" 2>/dev/null | tail -n1 | tr -dc '0-9')
+    usage_now=${usage_now:-0}
+
+    for name in "${snapshots[@]}"; do
+        root="$snapdir/$name/@"
+        info="$snapdir/$name/info.json"
+        tags="" comment=""
+        if [ -f "$info" ]; then
+            tags=$(sed -n 's/^[[:space:]]*"tags"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$info" | head -n1)
+            comment=$(sed -n 's/^[[:space:]]*"comments"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$info" | head -n1)
+        fi
+
+        # Timeshift names snapshots 2026-09-25_14-00-01.
+        when="${name:0:10} ${name:11:2}:${name:14:2}:${name:17:2}"
+        title="//$when"
+        [ -n "$tags" ] && title="$title ($tags)"
+        [ -n "$comment" ] && title="$title $comment"
+
+        kernels=""
+        for moddir in "$root"/usr/lib/modules/*/; do
+            moddir=${moddir%/}
+            [ -f "$moddir/vmlinuz" ] || continue
+            ver=$(basename "$moddir")
+            pkgbase=$(head -n1 "$moddir/pkgbase" 2>/dev/null || true)
+            pkgbase=${pkgbase:-linux}
+            sha=$(sha256sum "$moddir/vmlinuz" | cut -d' ' -f1)
+            kept="$HISTORY/$sha"
+
+            if [ ! -f "$kept/vmlinuz" ]; then
+                match=""
+                while IFS=$'\t' read -r kpath kcmd kmods; do
+                    kfile=$(resolve_path "$ESP" "$kpath") || continue
+                    [ -f "$kfile" ] || continue
+                    if [ "$(sha256sum "$kfile" | cut -d' ' -f1)" = "$sha" ] \
+                    || [ "$(kernel_version "$kfile" || true)" = "$ver" ]; then
+                        match="$kfile"$'\t'"$kcmd"$'\t'"$kmods"
+                        break
+                    fi
+                done <"$entries"
+
+                if [ -z "$match" ]; then
+                    note "$name: no kernel on the ESP matches $pkgbase $ver, skipping it"
+                    continue
+                fi
+
+                if [ "$usage_now" -ge "$ESP_USAGE_LIMIT" ]; then
+                    warn "$name: ESP is ${usage_now}% full (limit $ESP_USAGE_LIMIT%), not keeping $pkgbase $ver"
+                    continue
+                fi
+
+                IFS=$'\t' read -r kfile kcmd kmods <<<"$match"
+                if [ "$DRY_RUN" -eq 1 ]; then
+                    note "$name: would keep $pkgbase $ver from ${kfile#"$ESP"}"
+                    kept="$WORK/preview/$sha"
+                fi
+                mkdir -p "$kept.new"
+                cp "$kfile" "$kept.new/vmlinuz"
+                i=0
+                IFS=$'\x1f' read -r -a modlist <<<"$kmods"
+                for m in "${modlist[@]}"; do
+                    mfile=$(resolve_path "$ESP" "$m") || { warn "$name: cannot follow module path $m"; continue 2; }
+                    [ -f "$mfile" ] || { warn "$name: $mfile is missing"; continue 2; }
+                    cp "$mfile" "$kept.new/module-$i"
+                    i=$((i + 1))
+                done
+                printf '%s\n' "$kcmd" >"$kept.new/cmdline"
+                sync -f "$kept.new/vmlinuz" 2>/dev/null || sync
+                rm -rf "$kept"
+                mv "$kept.new" "$kept"
+                usage_now=$(df --output=pcent "$ESP" 2>/dev/null | tail -n1 | tr -dc '0-9')
+                usage_now=${usage_now:-0}
+            fi
+
+            keep[$sha]=1
+            rel="$HISTORY_REL/$sha"
+            cmdline=$(snapshot_cmdline "$(cat "$kept/cmdline")" "/timeshift-btrfs/snapshots/$name/@")
+            {
+                echo "///$pkgbase $ver"
+                echo "    protocol: linux"
+                echo "    kernel_path: boot():$rel/vmlinuz#$(b2 "$kept/vmlinuz")"
+                for m in "$kept"/module-*; do
+                    [ -f "$m" ] || continue
+                    echo "    module_path: boot():$rel/$(basename "$m")#$(b2 "$m")"
+                done
+                echo "    cmdline: $cmdline"
+            } >>"$WORK/kernels.$name"
+            kernels=1
+        done
+
+        if [ -n "$kernels" ]; then
+            {
+                echo "$title"
+                cat "$WORK/kernels.$name"
+            } >>"$block"
+        fi
+    done
+fi
+
+new="$WORK/limine.conf"
+strip_ours "$CONFIG" >"$new"
+if [ -s "$block" ]; then
+    {
+        echo
+        echo "/$ENTRY_TITLE"
+        echo "    $MARKER"
+        cat "$block"
+    } >>"$new"
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    if [ -s "$block" ]; then
+        echo "--- entry that would be written to $CONFIG ---"
+        echo "/$ENTRY_TITLE"
+        echo "    $MARKER"
+        cat "$block"
+    else
+        note "no bootable snapshots; the entry would be removed"
+    fi
+    if [ -n "$(enrolled_loaders "$ESP")" ]; then
+        note "the config is enrolled; $ENROLL_COMMAND would be run afterwards"
+    fi
+    exit 0
+fi
+
+# limine-snapper-sync rewrites this file too. Compared loosely, so blank lines
+# or indentation it touches do not cause a rewrite and re-enrolment each run.
+normalise() { sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$1"; }
+changed=0
+if [ "$(normalise "$new")" != "$(normalise "$CONFIG")" ]; then
+    changed=1
+fi
+
+if [ "$changed" -eq 1 ]; then
+    mapfile -t loaders < <(enrolled_loaders "$ESP")
+    if [ "${#loaders[@]}" -gt 0 ] && ! command -v "${ENROLL_COMMAND%% *}" >/dev/null 2>&1; then
+        die "the config is enrolled but $ENROLL_COMMAND is not available; not changing a config the loader would then refuse"
+    fi
+
+    backup="$CONFIG.timeshift.bak"
+    cp "$CONFIG" "$backup"
+    cp "$new" "$CONFIG.tmp"
+    sync -f "$CONFIG.tmp" 2>/dev/null || sync
+    mv -f "$CONFIG.tmp" "$CONFIG"
+    sync -f "$CONFIG" 2>/dev/null || sync
+    note "updated $CONFIG"
+
+    if [ "${#loaders[@]}" -gt 0 ]; then
+        # Enrolment may take the same lock itself, and would wait on this one
+        # forever: released for the duration, and the descriptor not passed on.
+        flock --unlock 200
+        $ENROLL_COMMAND 200>&- || warn "$ENROLL_COMMAND failed"
+        flock --timeout 60 200 || die "timed out waiting for $LOCK after enrolling"
+
+        # Whatever happened above, the loader must accept the config on disk:
+        # it panics at boot on a mismatch. If only the old config matches, the
+        # old config goes back.
+        want=$(b2 "$CONFIG")
+        old=$(b2 "$backup")
+        bad=0
+        for l in "${loaders[@]}"; do
+            got=$(enrolled_hash "$l")
+            if [ "$got" = "$want" ]; then
+                continue
+            elif [ "$got" = "$old" ]; then
+                bad=1
+            else
+                die "${l#"$ESP"} is enrolled for neither the old nor the new config; run $ENROLL_COMMAND by hand before rebooting"
+            fi
+        done
+        if [ "$bad" -eq 1 ]; then
+            cp "$backup" "$CONFIG"
+            sync -f "$CONFIG" 2>/dev/null || sync
+            die "the loader was not enrolled for the new config, so the old one has been put back"
+        fi
+    fi
+fi
+
+# Kept kernels no entry refers to any more.
+if [ -d "$HISTORY" ]; then
+    for d in "$HISTORY"/*/; do
+        d=${d%/}
+        [ -d "$d" ] || continue
+        sha=$(basename "$d")
+        case "$sha" in *.new) rm -rf "$d"; continue ;; esac
+        if [ -z "${keep[$sha]:-}" ]; then
+            rm -rf "$d"
+            note "removed kept kernel $sha"
+        fi
+    done
+    rmdir "$HISTORY" 2>/dev/null || true
+fi

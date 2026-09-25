@@ -1,0 +1,7 @@
+[Unit]
+Description=Update Limine boot entries for Timeshift snapshots
+ConditionPathExists=/usr/bin/timeshift
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/limine-timeshift-sync
