@@ -184,6 +184,42 @@ restore by replacing `@`, and neither knows about the other's snapshots.
 **Booting a snapshot.** Timeshift's snapshots are writable, so booting one
 changes it. Use it to recover, then restore properly with Timeshift.
 
+## Multi-profile UKIs
+
+A multi-profile UKI holds several command lines (normal boot, emergency
+shell, ...) under one signature. Limine can list each profile after `@0` as a
+menu entry of its own, but only for entries that opt in with
+`uki_profiles: yes`. `limine-systemd-bootctl` ships `limine-uki-profiles` to
+set that option safely:
+
+```console
+# limine-uki-profiles check "Arch Linux (UKI)"
+# limine-uki-profiles enable "Arch Linux (UKI)"
+# limine-uki-profiles disable "Arch Linux (UKI)"
+```
+
+`check` lists the entries that would be added and what could go wrong;
+`enable` runs the same checks and asks you to type `yes` before touching
+`limine.conf`. It refuses outright when the entry would not boot or the option
+would do nothing: not a `protocol: efi` entry, a file that is missing, not a
+multi-profile UKI, or not matching the hash in its path, a command line
+already pinned to a profile (`@N`), an unsigned UKI with Secure Boot on, or an
+enrolled config with no `limine-enroll-config` to re-enrol it. It warns, and
+still asks, when:
+
+- the Limine on the ESP predates `uki_profiles` and will ignore it;
+- `default_entry` is an index, which the added entries shift;
+- an added entry's title matches an existing one;
+- Secure Boot is on and the UKI has a built-in command line, so the entry's
+  own `cmdline` is ignored;
+- `limine-snapper-sync` is installed: its snapshot entries may copy the
+  option, and with Secure Boot on and a built-in command line they boot the
+  live system rather than the snapshot;
+- `limine-timeshift-sync` is installed: it makes no snapshot entries for UKIs.
+
+An enrolled config is re-enrolled afterwards and checked against the loader;
+if the loader does not accept the new file, the old one is put back.
+
 ## Signing the packages
 
 Every package and the database are signed by

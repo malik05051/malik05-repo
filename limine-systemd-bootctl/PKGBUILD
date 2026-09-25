@@ -7,7 +7,7 @@ pkgname=limine-systemd-bootctl
 # A pkgver may not contain a hyphen; the tag's becomes a dot.
 pkgver=${_tag#v}
 pkgver=${pkgver//-/.}
-pkgrel=2
+pkgrel=3
 # The version scheme changed from a commit count to the tag, and a tag such as
 # 12.9.1.modified sorts *below* the 12.9.0.r4468.g7ad9085c packages already
 # published: pacman compares "modified" against "r4468" as text. Without an
@@ -17,7 +17,7 @@ pkgdesc='Limine bootloader with systemd Boot Loader Interface support'
 arch=('x86_64')
 url='https://github.com/malik05051/Limine-systemd-bootctl'
 license=('BSD-2-Clause')
-depends=('glibc')
+depends=('glibc' 'bash' 'coreutils' 'util-linux' 'gawk' 'findutils' 'grep' 'sed')
 makedepends=('git' 'autoconf' 'automake' 'nasm' 'mtools' 'llvm' 'clang' 'lld')
 provides=('limine')
 conflicts=('limine')
@@ -27,11 +27,13 @@ options=('!strip' '!debug')
 source=("git+${url}.git#tag=${_tag}"
         'limine-esp-sync.hook'
         'limine-esp-sync'
-        'limine-esp-sync.conf.example')
+        'limine-esp-sync.conf.example'
+        'limine-uki-profiles')
 sha256sums=('SKIP'
             '78a51bea648d1ea6893ef2317a0b4872b147034006b51cdb91983233099ac360'
             '6ba02540b92938444158b66b81cd2a689c30e94aef9d84dd9528fc81076ae90c'
-            'f4cc257e1701bc060fcc6f8bca45b1ac89f203d23b1bef1c6dccc1dc351c6860')
+            'f4cc257e1701bc060fcc6f8bca45b1ac89f203d23b1bef1c6dccc1dc351c6860'
+            '73a50f7b879f1b6ab495c1d50de6587259ebd109fd8cb185e711a4f89ea9f660')
 
 pkgver() {
     cd "${_pkgname}"
@@ -76,4 +78,5 @@ package() {
     install -Dm0644 limine-esp-sync.hook         "${pkgdir}/usr/share/libalpm/hooks/95-limine-esp-sync.hook"
     install -Dm0755 limine-esp-sync         "${pkgdir}/usr/share/libalpm/scripts/limine-esp-sync"
     install -Dm0644 limine-esp-sync.conf.example         "${pkgdir}/usr/share/doc/limine/limine-esp-sync.conf.example"
+    install -Dm0755 limine-uki-profiles "${pkgdir}/usr/bin/limine-uki-profiles"
 }

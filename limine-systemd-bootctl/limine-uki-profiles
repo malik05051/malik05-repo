@@ -1,0 +1,534 @@
+#!/bin/bash
+# Turns Limine's uki_profiles option on or off for one limine.conf entry, after
+# checking what it would break. Enabling asks for confirmation, and nothing is
+# written unless every check that would make the entry unbootable or the
+# option a no-op has passed.
+
+set -euo pipefail
+
+# Shared with limine-snapper-sync and limine-timeshift-sync, which rewrite the
+# same limine.conf.
+readonly LOCK=/run/lock/boot-partition.lock
+readonly SIGNATURE='++CONFIG_B2SUM_SIGNATURE++'
+readonly ZERO_HASH=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+readonly EFI_GLOBAL=8be4df61-93ca-11d2-aa0d-00e098032b8c
+# Limine lists no more than this many profiles past @0.
+readonly PROFILES_MAX=64
+
+ESP_PATH="${ESP_PATH:-}"
+ENROLL_COMMAND="${ENROLL_COMMAND:-limine-enroll-config}"
+
+usage() {
+    cat <<EOF
+Usage: limine-uki-profiles check <entry>
+       limine-uki-profiles enable <entry>
+       limine-uki-profiles disable <entry>
+
+<entry> is a limine.conf entry title, or its path through directories
+("OSes/Arch Linux"), naming a "protocol: efi" entry that boots a UKI.
+
+  check    Report what enabling would add and what it could break.
+  enable   The same checks, then add "uki_profiles: yes" to the entry once
+           you confirm. Refused while any check fails.
+  disable  Remove "uki_profiles" from the entry.
+
+The config is re-enrolled with \$ENROLL_COMMAND ($ENROLL_COMMAND) when the
+loader has its hash enrolled. ESP_PATH picks the partition holding limine.conf
+when it is not one of /efi, /boot and /boot/efi.
+EOF
+}
+
+note() { echo "limine-uki-profiles: $*"; }
+warn() { echo "limine-uki-profiles: $*" >&2; }
+die() { warn "$*"; exit 1; }
+
+[ $# -eq 2 ] || { usage >&2; exit 2; }
+ACTION=$1
+WANTED=$2
+case "$ACTION" in
+    check|enable|disable) ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+esac
+
+[ "$(id -u)" -eq 0 ] || die "must be run as root"
+
+WORK=$(mktemp -d /run/limine-uki-profiles.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+# Limine searches these, in this order, relative to the partition it booted
+# from. The first one it finds is the one it reads.
+find_config() {
+    local esp=$1 rel
+    for rel in EFI/limine/limine.conf EFI/BOOT/limine.conf boot/limine/limine.conf \
+               boot/limine.conf limine/limine.conf limine.conf; do
+        if [ -f "$esp/$rel" ]; then
+            echo "$esp/$rel"
+            return 0
+        fi
+    done
+    return 1
+}
+
+find_esp() {
+    local dir
+    if [ -n "$ESP_PATH" ]; then
+        find_config "$ESP_PATH" >/dev/null || die "no limine.conf under ESP_PATH=$ESP_PATH"
+        echo "$ESP_PATH"
+        return 0
+    fi
+    for dir in /efi /boot /boot/efi; do
+        if mountpoint -q "$dir" && find_config "$dir" >/dev/null; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    die "could not find the partition holding limine.conf; set ESP_PATH"
+}
+
+enrolled_hash() {
+    local h
+    h=$(grep -aoE "\+\+CONFIG_B2SUM_SIGNATURE\+\+[0-9a-fA-F]{128}" "$1" 2>/dev/null | head -n1) || true
+    h=${h#"$SIGNATURE"}
+    echo "$h" | tr 'A-F' 'a-f'
+}
+
+# Every Limine binary on the ESP; only Limine carries the signature marker.
+limine_loaders() {
+    local f
+    while IFS= read -r -d '' f; do
+        if grep -aq -- "$SIGNATURE" "$f" 2>/dev/null; then
+            printf '%s\n' "$f"
+        fi
+    done < <(find "$ESP/EFI" -maxdepth 2 -type f -iname '*.efi' -print0 2>/dev/null)
+}
+
+enrolled_loaders() {
+    local f h
+    while IFS= read -r f; do
+        h=$(enrolled_hash "$f")
+        if [ -n "$h" ] && [ "$h" != "$ZERO_HASH" ]; then
+            printf '%s\n' "$f"
+        fi
+    done < <(limine_loaders)
+}
+
+b2() { b2sum "$1" | cut -d' ' -f1; }
+
+u16() { od -An -tu2 -j "$2" -N2 "$1" | tr -d ' '; }
+u32() { od -An -tu4 -j "$2" -N4 "$1" | tr -d ' '; }
+
+secure_boot_on() {
+    local v=/sys/firmware/efi/efivars/SecureBoot-$EFI_GLOBAL
+    [ -r "$v" ] && [ "$(od -An -tu1 -j4 -N1 "$v" | tr -d ' ')" = 1 ]
+}
+
+# One line per entry: line number, depth, and the path through directories
+# with each title's own "/" written "\/", as Limine writes entry paths.
+list_entries() {
+    awk '
+        /^[[:space:]]*\// {
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            depth = 0
+            while (substr(line, 1, 1) == "/") { depth++; line = substr(line, 2) }
+            sub(/^\+/, "", line)
+            sub(/[[:space:]]*$/, "", line)
+            name = line
+            gsub(/\\/, "\\\\", name); gsub(/\//, "\\/", name); gsub(/#/, "\\#", name)
+            names[depth] = name
+            path = names[1]
+            for (i = 2; i <= depth; i++) path = path "/" names[i]
+            printf "%d\t%d\t%s\t%s\n", NR, depth, path, line
+        }
+    ' "$CONFIG"
+}
+
+# The first value of a key within the entry whose title is on line $1.
+entry_option() {
+    awk -v start="$1" -v key="$2" '
+        NR <= start { next }
+        /^[[:space:]]*\// { exit }
+        {
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            i = index(line, ":")
+            if (i == 0) next
+            k = tolower(substr(line, 1, i - 1))
+            if (k != key) next
+            v = substr(line, i + 1)
+            sub(/^[[:space:]]*/, "", v)
+            sub(/[[:space:]]*$/, "", v)
+            print v
+            exit
+        }
+    ' "$CONFIG"
+}
+
+expand_macros() {
+    local value=$1 name macro
+    while [[ "$value" =~ \$\{([A-Za-z0-9_]+)\} ]]; do
+        name=${BASH_REMATCH[1]}
+        macro=$(grep -m1 -E "^[[:space:]]*\\\$\\{$name\\}=" "$CONFIG" | sed 's/^[^=]*=//') || true
+        [ -n "$macro" ] || return 1
+        value=${value//"\${$name}"/$macro}
+    done
+    printf '%s\n' "$value"
+}
+
+# The file a Limine URI names, when it is mounted here.
+uri_to_file() {
+    local uri=${1%#*} resource root rel dev mnt
+    [[ "$uri" =~ ^([^\(]*)\(([^\)]*)\):/(.*)$ ]] || return 1
+    resource=${BASH_REMATCH[1]}
+    root=${BASH_REMATCH[2]}
+    rel=${BASH_REMATCH[3]}
+    case "$resource" in
+        boot)
+            [ -z "$root" ] || return 1
+            echo "$ESP/$rel"
+            return 0
+            ;;
+        guid|uuid)
+            dev=/dev/disk/by-partuuid/${root,,}
+            [ -e "$dev" ] || dev=/dev/disk/by-uuid/$root
+            ;;
+        fslabel) dev=/dev/disk/by-label/$root ;;
+        *) return 1 ;;
+    esac
+    [ -e "$dev" ] || return 1
+    mnt=$(findmnt -rno TARGET -S "$(readlink -f "$dev")" | head -n1) || true
+    [ -n "$mnt" ] || return 1
+    echo "$mnt/$rel"
+}
+
+# Section table of a PE file as "name offset size" lines, sizes clamped the
+# way Limine clamps them.
+pe_sections() {
+    local f=$1 size nt count table_off opt i base name vsize rawsize ptr sz
+    size=$(stat -c %s "$f")
+    [ "$size" -ge 64 ] || return 1
+    [ "$(head -c2 "$f")" = MZ ] || return 1
+    nt=$(u32 "$f" 60)
+    [ "$nt" -le $((size - 24)) ] || return 1
+    [ "$(dd if="$f" bs=1 skip="$nt" count=4 status=none | od -An -tx1 | tr -d ' ')" = 50450000 ] || return 1
+    count=$(u16 "$f" $((nt + 6)))
+    opt=$(u16 "$f" $((nt + 20)))
+    table_off=$((nt + 24 + opt))
+    [ "$count" -gt 0 ] && [ $((table_off + 40 * count)) -le "$size" ] || return 1
+    for ((i = 0; i < count; i++)); do
+        base=$((table_off + 40 * i))
+        name=$(dd if="$f" bs=1 skip="$base" count=8 status=none | tr -d '\0')
+        vsize=$(u32 "$f" $((base + 8)))
+        rawsize=$(u32 "$f" $((base + 16)))
+        ptr=$(u32 "$f" $((base + 20)))
+        sz=$rawsize
+        if [ "$vsize" -ne 0 ] && [ "$vsize" -lt "$sz" ]; then
+            sz=$vsize
+        fi
+        if [ "$ptr" -gt "$size" ] || [ "$sz" -gt $((size - ptr)) ]; then
+            ptr=0
+            sz=0
+        fi
+        printf '%s %s %s\n' "$name" "$ptr" "$sz"
+    done
+}
+
+# Whether the image carries an Authenticode signature at all.
+pe_signed() {
+    local f=$1 nt opt magic dir
+    nt=$(u32 "$f" 60)
+    opt=$((nt + 24))
+    magic=$(u16 "$f" "$opt")
+    if [ "$magic" = 523 ]; then
+        dir=$((opt + 112))
+    else
+        dir=$((opt + 96))
+    fi
+    [ "$(u32 "$f" $((dir + 4 * 8 + 4)))" -gt 0 ]
+}
+
+# A .profile value as Limine shows it: one pair of enclosing quotes dropped,
+# only printable ASCII kept, at most 63 characters.
+profile_value() {
+    local v=$1
+    if [ "${#v}" -ge 2 ]; then
+        case "$v" in
+            \"*\"|\'*\') v=${v:1:${#v}-2} ;;
+        esac
+    fi
+    v=$(printf '%s' "$v" | LC_ALL=C tr -cd '\040-\176')
+    printf '%s' "${v:0:63}"
+}
+
+# Boot Loader Interface identifier Limine gives an entry path.
+bli_id() {
+    printf '%s' "$1" | LC_ALL=C sed -e 's|/|.|g' -e 's|[^A-Za-z0-9+_.@-]|-|g'
+}
+
+ESP=$(find_esp)
+CONFIG=$(find_config "$ESP")
+
+mkdir -p /run/lock
+exec 200>"$LOCK"
+flock --timeout 60 200 || die "timed out waiting for $LOCK"
+
+list_entries >"$WORK/entries"
+matches=$(awk -F'\t' -v w="$WANTED" '$3 == w || $4 == w' "$WORK/entries")
+[ -n "$matches" ] || die "no entry named \"$WANTED\" in $CONFIG"
+[ "$(printf '%s\n' "$matches" | wc -l)" -eq 1 ] || {
+    warn "\"$WANTED\" names more than one entry; use its full path:"
+    printf '%s\n' "$matches" | cut -f3 | sed 's/^/    /' >&2
+    exit 1
+}
+IFS=$'\t' read -r LINE DEPTH ENTRY_PATH TITLE <<<"$matches"
+
+current=$(entry_option "$LINE" uki_profiles)
+
+enrol_and_verify() {
+    local backup=$1 want old got l bad=0
+    local -a loaders
+    mapfile -t loaders < <(enrolled_loaders)
+    [ "${#loaders[@]}" -gt 0 ] || return 0
+
+    # Enrolment may take the same lock itself, and would wait on this one
+    # forever: released for the duration, and the descriptor not passed on.
+    flock --unlock 200
+    $ENROLL_COMMAND 200>&- || warn "$ENROLL_COMMAND failed"
+    flock --timeout 60 200 || die "timed out waiting for $LOCK after enrolling"
+
+    # The loader panics on a config that does not match its hash, so it has
+    # to match whichever config is left on disk.
+    want=$(b2 "$CONFIG")
+    old=$(b2 "$backup")
+    for l in "${loaders[@]}"; do
+        got=$(enrolled_hash "$l")
+        if [ "$got" = "$want" ]; then
+            continue
+        elif [ "$got" = "$old" ]; then
+            bad=1
+        else
+            die "${l#"$ESP"} is enrolled for neither the old nor the new config; run $ENROLL_COMMAND by hand before rebooting"
+        fi
+    done
+    if [ "$bad" -eq 1 ]; then
+        cp "$backup" "$CONFIG"
+        sync -f "$CONFIG" 2>/dev/null || sync
+        die "the loader was not enrolled for the new config, so the old one has been put back"
+    fi
+    note "re-enrolled the config"
+}
+
+write_config() {
+    local new=$1 backup="$CONFIG.uki-profiles.bak"
+    if [ -n "$(enrolled_loaders)" ] && ! command -v "${ENROLL_COMMAND%% *}" >/dev/null 2>&1; then
+        die "the config is enrolled but $ENROLL_COMMAND is not available; not changing a config the loader would then refuse"
+    fi
+    cp "$CONFIG" "$backup"
+    cp "$new" "$CONFIG.tmp"
+    sync -f "$CONFIG.tmp" 2>/dev/null || sync
+    mv -f "$CONFIG.tmp" "$CONFIG"
+    sync -f "$CONFIG" 2>/dev/null || sync
+    note "updated $CONFIG (previous version in ${backup##*/})"
+    enrol_and_verify "$backup"
+}
+
+if [ "$ACTION" = disable ]; then
+    [ -n "$current" ] || { note "\"$ENTRY_PATH\" does not set uki_profiles"; exit 0; }
+    awk -v start="$LINE" '
+        NR > start && !done && /^[[:space:]]*\// { done = 1 }
+        NR > start && !done && tolower($0) ~ /^[[:space:]]*uki_profiles[[:space:]]*:/ { next }
+        { print }
+    ' "$CONFIG" >"$WORK/new"
+    write_config "$WORK/new"
+    note "disabled UKI profiles for \"$ENTRY_PATH\""
+    exit 0
+fi
+
+if [ "$ACTION" = enable ] && [ "$current" = yes ]; then
+    note "\"$ENTRY_PATH\" already has uki_profiles: yes"
+    exit 0
+fi
+
+errors=()
+warnings=()
+added=()
+
+next_depth=$(awk -F'\t' -v l="$LINE" '$1 > l { print $2; exit }' "$WORK/entries")
+protocol=$(entry_option "$LINE" protocol)
+path=$(entry_option "$LINE" path)
+[ -n "$path" ] || path=$(entry_option "$LINE" image_path)
+cmdline=$(entry_option "$LINE" kernel_cmdline)
+[ -n "$cmdline" ] || cmdline=$(entry_option "$LINE" cmdline)
+
+uki=""
+if [[ "$cmdline" == @* ]]; then
+    errors+=("The entry's command line already starts with a profile selector (\"${cmdline%% *}\"); Limine lists no profiles for it.")
+elif [ -n "$next_depth" ] && [ "$next_depth" -gt "$DEPTH" ]; then
+    errors+=("\"$ENTRY_PATH\" is a directory, not a bootable entry.")
+elif [ "$protocol" != efi ] && [ "$protocol" != efi_chainload ] && [ "$protocol" != uefi ]; then
+    errors+=("\"$ENTRY_PATH\" uses protocol \"${protocol:-none}\"; only \"protocol: efi\" entries can boot a UKI.")
+elif [ -z "$path" ]; then
+    errors+=("\"$ENTRY_PATH\" has no path.")
+elif ! path=$(expand_macros "$path"); then
+    errors+=("The entry's path uses a macro this tool cannot resolve.")
+elif [[ "$path" == \$* ]]; then
+    errors+=("The path is gzip-compressed (\"\$\" prefix); Limine does not list profiles for those.")
+elif ! [[ "$path" =~ ^(boot|guid|uuid|fslabel)\( ]]; then
+    errors+=("The path is not a boot(), guid(), uuid() or fslabel() one; Limine does not list profiles for it.")
+elif [[ "$path" =~ ^boot\([^\)]+\) ]]; then
+    errors+=("The path names a partition number (boot(N):); this tool cannot tell which mounted partition that is.")
+elif ! uki=$(uri_to_file "$path") || [ ! -f "$uki" ]; then
+    errors+=("The file \"$path\" names is not mounted here or does not exist.")
+    uki=""
+fi
+
+if [ -n "$uki" ]; then
+    hash=""
+    [[ "$path" == *#* ]] && hash=${path##*#}
+    if [ -n "$hash" ] && [ "$(b2 "$uki")" != "${hash,,}" ]; then
+        errors+=("${uki#"$ESP"} does not match the hash in its path, so the entry would not boot at all.")
+    fi
+
+    if ! pe_sections "$uki" >"$WORK/sections"; then
+        errors+=("${uki#"$ESP"} is not a PE image.")
+    else
+        nprofiles=$(awk '$1 == ".profile"' "$WORK/sections" | wc -l)
+        has_cmdline=$(awk '$1 == ".cmdline"' "$WORK/sections" | wc -l)
+        if [ "$nprofiles" -lt 2 ]; then
+            errors+=("${uki#"$ESP"} has $nprofiles profile(s); there is nothing past @0 to list.")
+        else
+            [ "$nprofiles" -le $((PROFILES_MAX + 1)) ] || \
+                warnings+=("The UKI has $nprofiles profiles; Limine lists only the first $((PROFILES_MAX + 1)).")
+            n=0
+            while read -r name off size; do
+                [ "$name" = .profile ] || continue
+                n=$((n + 1))
+                [ "$n" -gt 1 ] || continue
+                [ "$n" -le $((PROFILES_MAX + 1)) ] || break
+                meta=""
+                if [ "$size" -gt 0 ]; then
+                    [ "$size" -le 4096 ] || size=4096
+                    # Limine reads the metadata as a C string, so a NUL ends it.
+                    meta=$(dd if="$uki" bs=1 skip="$off" count="$size" status=none | head -z -n1 | tr -d '\0')
+                fi
+                id=$(profile_value "$(printf '%s\n' "$meta" | sed -n 's/^ID=//p' | tail -n1)")
+                title=$(profile_value "$(printf '%s\n' "$meta" | sed -n 's/^TITLE=//p' | tail -n1)")
+                label=${title:-${id:-Profile #$n}}
+                selector=$((n - 1))
+                added+=("$TITLE ($label)|@$selector|$(bli_id "$ENTRY_PATH@${id:-$selector}")")
+            done <"$WORK/sections"
+        fi
+
+        if secure_boot_on; then
+            if ! pe_signed "$uki"; then
+                errors+=("Secure Boot is on and ${uki#"$ESP"} is not signed; the firmware refuses it and every profile entry.")
+            fi
+            if [ "$has_cmdline" -gt 0 ] && [ -n "$cmdline" ]; then
+                warnings+=("Secure Boot is on and the UKI has a built-in command line, so the stub ignores this entry's \"cmdline: $cmdline\" (the profile entries pass it on after @N, and it is ignored there too).")
+            fi
+        fi
+    fi
+fi
+
+mapfile -t loaders < <(limine_loaders)
+if [ "${#loaders[@]}" -eq 0 ]; then
+    warnings+=("No Limine loader was found under ${ESP}/EFI, so support for uki_profiles could not be checked.")
+else
+    for l in "${loaders[@]}"; do
+        if ! grep -aq UKI_PROFILES "$l"; then
+            warnings+=("${l#"$ESP"} is a Limine without uki_profiles support: it will ignore the option and show no profile entries until it is updated.")
+        fi
+    done
+fi
+
+default_entry=$(grep -m1 -iE '^[[:space:]]*default_entry[[:space:]]*:' "$CONFIG" | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//') || true
+if [[ "$default_entry" =~ ^[0-9]+$ ]] && [ "${#added[@]}" -gt 0 ]; then
+    warnings+=("default_entry is the index $default_entry. The ${#added[@]} added entries shift every entry after \"$TITLE\" down, so that index may name a different entry. Use the entry's path instead, e.g. \"default_entry: $ENTRY_PATH\".")
+fi
+
+if [ "${#added[@]}" -gt 0 ]; then
+    siblings=$(awk -F'\t' -v d="$DEPTH" '$2 == d { print $4 }' "$WORK/entries")
+    for a in "${added[@]}"; do
+        if printf '%s\n' "$siblings" | grep -qxF -- "${a%%|*}"; then
+            warnings+=("An entry named \"${a%%|*}\" already exists at this level; the two will share a name and be told apart only by a #N suffix in their paths.")
+        fi
+    done
+fi
+
+if command -v limine-snapper-sync >/dev/null 2>&1; then
+    warnings+=("limine-snapper-sync is installed. Snapshot entries it makes from this entry may carry uki_profiles over and list the same profiles.")
+    if secure_boot_on && [ -n "$uki" ] && [ "${has_cmdline:-0}" -gt 0 ]; then
+        warnings+=("Secure Boot is on and the UKI has a built-in command line: the stub ignores the rootflags=subvol=... that snapshot entries set, so snapshot entries of this UKI, profiles included, boot the live system, not the snapshot.")
+    fi
+fi
+if command -v limine-timeshift-sync >/dev/null 2>&1; then
+    warnings+=("limine-timeshift-sync makes snapshot entries only from \"protocol: linux\" entries; this UKI gets none, with or without profiles.")
+fi
+
+if [ -n "$(enrolled_loaders)" ]; then
+    if command -v "${ENROLL_COMMAND%% *}" >/dev/null 2>&1; then
+        warnings+=("The config hash is enrolled: limine.conf will be re-enrolled with $ENROLL_COMMAND after the change, and checked against the loader.")
+    else
+        errors+=("The config hash is enrolled but $ENROLL_COMMAND is not available; the loader would refuse the changed config.")
+    fi
+fi
+
+# The first line after the prefix, the rest indented to match.
+wrapped() {
+    local prefix=$1 pad
+    pad=$(printf '%*s' "${#prefix}" '')
+    printf '%s\n' "$2" | fold -s -w $((78 - ${#prefix})) | sed -e "1s/^/$prefix/" -e "2,\$s/^/$pad/"
+}
+
+echo "Entry:  $ENTRY_PATH  (line $LINE of $CONFIG)"
+[ -z "$uki" ] || echo "UKI:    $uki"
+if [ "${#added[@]}" -gt 0 ]; then
+    echo
+    echo "Menu entries that would be added after it:"
+    for a in "${added[@]}"; do
+        IFS='|' read -r name selector id <<<"$a"
+        echo "    $name"
+        echo "        passes $selector, Boot Loader Interface id $id"
+    done
+    echo "\"$TITLE\" itself keeps booting @0."
+fi
+if [ "${#warnings[@]}" -gt 0 ]; then
+    echo
+    echo "Warnings:"
+    for w in "${warnings[@]}"; do
+        wrapped "  WARNING: " "$w"
+    done
+fi
+if [ "${#errors[@]}" -gt 0 ]; then
+    echo
+    echo "Problems:"
+    for e in "${errors[@]}"; do
+        wrapped "  ERROR: " "$e"
+    done
+    echo
+    [ "$ACTION" = check ] && exit 1
+    die "not enabling uki_profiles for \"$ENTRY_PATH\" while the problems above remain"
+fi
+
+[ "$ACTION" = enable ] || exit 0
+
+echo
+[ -t 0 ] || [ -r /dev/tty ] || die "enabling needs a terminal to confirm on"
+printf 'Type "yes" to add uki_profiles: yes to "%s": ' "$ENTRY_PATH"
+{ read -r answer </dev/tty; } 2>/dev/null || answer=""
+[ "$answer" = yes ] || die "not confirmed; nothing changed"
+
+indent=$(awk -v start="$LINE" '
+    NR <= start { next }
+    /^[[:space:]]*\// { exit }
+    /[^[:space:]]/ { match($0, /^[[:space:]]*/); print substr($0, 1, RLENGTH); exit }
+' "$CONFIG")
+awk -v start="$LINE" -v opt="${indent}uki_profiles: yes" '
+    NR > start && !done && tolower($0) ~ /^[[:space:]]*uki_profiles[[:space:]]*:/ { next }
+    NR > start && !done && /^[[:space:]]*\// { done = 1 }
+    { print }
+    NR == start { print opt }
+' "$CONFIG" >"$WORK/new"
+write_config "$WORK/new"
+note "enabled UKI profiles for \"$ENTRY_PATH\"; they appear in the menu on the next boot"
