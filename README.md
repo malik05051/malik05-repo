@@ -88,8 +88,20 @@ Create a directory named after the package with a `PKGBUILD` in it and push to
 firmware actually loads are separate copies on the ESP, so an upgrade does not
 reach them until something copies them across.
 
-`limine-systemd-bootctl` ships a pacman hook that will do it, and does nothing
-at all until you configure it:
+**With limine-entry-tool** (installed alongside `limine-snapper-sync`,
+`limine-mkinitcpio-hook` and `limine-dracut-support`): nothing to set up. Its
+own deploy hook only fires for a package literally named `limine`, so this
+package ships the same hook for itself: every install and upgrade runs
+`limine-install`, exactly as with the official `limine` package. That copies
+the loader to `EFI/limine/limine_x64.efi`, refreshes the backup
+`limine-snapper-sync` restores, enrols the config and signs the loader if
+configured, and registers a UEFI boot entry if there is none. If you added a
+hook of your own earlier to run `limine-install`
+(`/etc/pacman.d/hooks/9x-limine-systemd-bootctl.hook`), delete it; it would
+only run the same thing twice.
+
+**Without limine-entry-tool**, `limine-systemd-bootctl` can copy the loader
+itself, but does nothing until you configure it:
 
 ```console
 # cp /usr/share/doc/limine/limine-esp-sync.conf.example /etc/limine-esp-sync.conf
@@ -110,35 +122,11 @@ rename that reports success and leaves something else behind is how a machine
 ends up booting a loader nobody installed, so the hook checks rather than
 assumes, and fails the transaction if the two do not match.
 
-### Systems running limine-snapper-sync
-
-That check passes and the loader still reverts if something rewrites the ESP
-after pacman has finished. `limine-snapper-sync` restores its own backup of the
-loader on every snapshot, and that backup is only refreshed by
-`limine-install`. Writing the ESP directly leaves the backup describing an
-older loader, which the next snapshot then reinstates.
-
-Where both are installed, let `limine-install` own the ESP. Empty `TARGETS` in
-`/etc/limine-esp-sync.conf` so this hook stands down, and add a hook of your
-own to run the other tool, whose own trigger only matches a package literally
-named `limine`:
-
-```ini
-# /etc/pacman.d/hooks/96-limine-systemd-bootctl.hook
-[Trigger]
-Type = Path
-Operation = Install
-Operation = Upgrade
-Target = usr/share/limine/*
-
-[Action]
-Description = Deploying Limine to the ESP...
-When = PostTransaction
-Exec = /usr/bin/limine-install
-```
-
-Run `limine-install` once by hand afterwards: until it does, the stale backup
-is still there waiting for the next snapshot.
+Do not use both on a machine running `limine-snapper-sync`: it restores its own
+backup of the loader on every snapshot, and only `limine-install` refreshes
+that backup. A loader copied by this hook would be replaced by the older one at
+the next snapshot. Leave `TARGETS` empty there, or remove
+`/etc/limine-esp-sync.conf`.
 
 ## Booting Timeshift snapshots
 

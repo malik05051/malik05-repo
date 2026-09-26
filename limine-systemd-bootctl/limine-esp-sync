@@ -9,6 +9,10 @@ set -euo pipefail
 conf=/etc/limine-esp-sync.conf
 
 if [ ! -r "$conf" ]; then
+    # limine-entry-tool's limine-install deploys the loader from its own hook.
+    if [ -x /usr/bin/limine-install ]; then
+        exit 0
+    fi
     echo "limine: $conf does not exist, leaving the ESP alone."
     echo "limine: see /usr/share/doc/limine/limine-esp-sync.conf.example"
     exit 0
@@ -21,6 +25,9 @@ SIGN_COMMAND=""
 . "$conf"
 
 if [ "${#TARGETS[@]}" -eq 0 ]; then
+    if [ -x /usr/bin/limine-install ]; then
+        exit 0
+    fi
     echo "limine: TARGETS is empty in $conf, nothing to copy."
     exit 0
 fi
