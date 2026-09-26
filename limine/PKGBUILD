@@ -3,11 +3,13 @@
 _pkgname=Limine-systemd-bootctl
 _tag=v12.9.2-modified
 
-pkgname=limine-systemd-bootctl
+# Named limine so that every pacman hook written for Arch's package fires for
+# this one too: hooks match a package by name, never by what it provides.
+pkgname=limine
 # A pkgver may not contain a hyphen; the tag's becomes a dot.
 pkgver=${_tag#v}
 pkgver=${pkgver//-/.}
-pkgrel=2
+pkgrel=1
 # The version scheme changed from a commit count to the tag, and a tag such as
 # 12.9.1.modified sorts *below* the 12.9.0.r4468.g7ad9085c packages already
 # published: pacman compares "modified" against "r4468" as text. Without an
@@ -19,8 +21,10 @@ url='https://github.com/malik05051/Limine-systemd-bootctl'
 license=('BSD-2-Clause')
 depends=('glibc' 'bash' 'coreutils' 'util-linux' 'gawk' 'findutils' 'grep' 'sed')
 makedepends=('git' 'autoconf' 'automake' 'nasm' 'mtools' 'llvm' 'clang' 'lld')
-provides=('limine')
-conflicts=('limine')
+# The name this package was published under before.
+provides=('limine-systemd-bootctl')
+conflicts=('limine-systemd-bootctl')
+replaces=('limine-systemd-bootctl')
 # The EFI and BIOS blobs are firmware images, not host executables; leave them
 # exactly as the build produced them.
 options=('!strip' '!debug')
@@ -28,14 +32,12 @@ source=("git+${url}.git#tag=${_tag}"
         'limine-esp-sync.hook'
         'limine-esp-sync'
         'limine-esp-sync.conf.example'
-        'limine-uki-profiles'
-        'limine-install.hook')
+        'limine-uki-profiles')
 sha256sums=('SKIP'
             '78a51bea648d1ea6893ef2317a0b4872b147034006b51cdb91983233099ac360'
-            '3267f6a95c9ca061c3109d5729efa2b96faa58e60d565fd1e93a62bae9f1d2d3'
+            '3dec5c5fb3912a0a7d7a51708aa81ba64be0b8ff968a2175fafc6c2d0f0501d4'
             'f4cc257e1701bc060fcc6f8bca45b1ac89f203d23b1bef1c6dccc1dc351c6860'
-            '73a50f7b879f1b6ab495c1d50de6587259ebd109fd8cb185e711a4f89ea9f660'
-            '0ff2f3331030970e6d69a7dc5688085eb046d7530a9f6dccf739af05c5d7dc55')
+            '73a50f7b879f1b6ab495c1d50de6587259ebd109fd8cb185e711a4f89ea9f660')
 
 pkgver() {
     cd "${_pkgname}"
@@ -74,11 +76,9 @@ package() {
 
     cd "${srcdir}"
 
-    # limine-entry-tool deploys the loader from a hook that only matches a
-    # package named limine; this one does the same for this package, and only
-    # where that tool is installed. The direct copy stays opt-in: it does
-    # nothing until /etc/limine-esp-sync.conf exists.
-    install -Dm0644 limine-install.hook "${pkgdir}/usr/share/libalpm/hooks/80-limine-systemd-bootctl-install.hook"
+    # Copying the loader onto the ESP is opt-in: the hook does nothing until
+    # /etc/limine-esp-sync.conf exists. Whatever deploys Arch's limine, such
+    # as limine-entry-tool, deploys this package the same way.
     install -Dm0644 limine-esp-sync.hook         "${pkgdir}/usr/share/libalpm/hooks/95-limine-esp-sync.hook"
     install -Dm0755 limine-esp-sync         "${pkgdir}/usr/share/libalpm/scripts/limine-esp-sync"
     install -Dm0644 limine-esp-sync.conf.example         "${pkgdir}/usr/share/doc/limine/limine-esp-sync.conf.example"

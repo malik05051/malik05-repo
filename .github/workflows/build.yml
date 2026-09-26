@@ -109,12 +109,19 @@ jobs:
             --pattern "$REPO_NAME.db.tar.gz" \
             --pattern "$REPO_NAME.files.tar.gz" || true
 
+          # Names no PKGBUILD builds any more. A carried-forward database would
+          # otherwise keep offering them: limine-systemd-bootctl became limine.
+          retired="limine-systemd-bootctl"
+
           if [ -n "${GPG_KEY_ID:-}" ]; then
             repo-add --sign --key "$GPG_KEY_ID" \
               "/tmp/repo/$REPO_NAME.db.tar.gz" /tmp/repo/*.pkg.tar.zst
+            repo-remove --sign --key "$GPG_KEY_ID" \
+              "/tmp/repo/$REPO_NAME.db.tar.gz" $retired || true
             gpg --export --armor "$GPG_KEY_ID" >"/tmp/repo/$REPO_NAME.asc"
           else
             repo-add "/tmp/repo/$REPO_NAME.db.tar.gz" /tmp/repo/*.pkg.tar.zst
+            repo-remove "/tmp/repo/$REPO_NAME.db.tar.gz" $retired || true
           fi
 
           # repo-add leaves .db and .files (and their signatures) as symlinks
