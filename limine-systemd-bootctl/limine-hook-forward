@@ -1,0 +1,147 @@
+#!/bin/bash
+# Runs the pacman hooks written for Arch's limine package, which match a
+# package by its name and so never fire for this one: limine-entry-tool
+# deploys the loader from one, and the ArchWiki suggests another. Called
+# after this package is installed or upgraded, with that operation.
+
+set -uo pipefail
+
+readonly PKG=limine-systemd-bootctl
+readonly AS=limine
+readonly SELF_PREFIX=80-limine-systemd-bootctl-forward
+
+op=${1:-}
+case "$op" in
+    Install|Upgrade) ;;
+    *) echo "usage: limine-hook-forward Install|Upgrade" >&2; exit 2 ;;
+esac
+
+# pacman's own order: hook directories in turn, a later one's file replacing
+# an earlier one's of the same name, run by file name.
+declare -A hooks=()
+dirs=(/usr/share/libalpm/hooks)
+while IFS= read -r d; do
+    [ -n "$d" ] && dirs+=("${d%/}")
+done < <(pacman-conf HookDir 2>/dev/null || echo /etc/pacman.d/hooks)
+for d in "${dirs[@]}"; do
+    for f in "$d"/*.hook; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        hooks[$(basename "$f")]=$f
+    done
+done
+
+mapfile -t own_files < <(pacman -Qlq "$PKG" 2>/dev/null | sed 's|^/||')
+
+# alpm's matching: patterns in order, the last one to match deciding, a
+# leading ! negating. fnmatch without FNM_PATHNAME, as [[ == ]] is.
+matches() {
+    local subject=$1 p result=1
+    shift
+    for p in "$@"; do
+        if [ "${p:0:1}" = "!" ]; then
+            # shellcheck disable=SC2053
+            [[ $subject == ${p:1} ]] && result=1
+        else
+            # shellcheck disable=SC2053
+            [[ $subject == $p ]] && result=0
+        fi
+    done
+    return $result
+}
+
+# One line per trigger (T, type, operations, targets) and one for the action
+# (A, when, exec, needs targets, description), fields split by \x1e and
+# lists by \x1f.
+parse_hook() {
+    awk '
+        function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+        function flush() {
+            if (sec == "trigger") printf "T\x1e%s\x1e%s\x1e%s\n", type, ops, tgts
+            type = ""; ops = ""; tgts = ""
+        }
+        /^[ \t]*(#|$)/ { next }
+        /^[ \t]*\[/ {
+            flush()
+            s = tolower(trim($0))
+            sec = (s == "[trigger]") ? "trigger" : (s == "[action]") ? "action" : ""
+            next
+        }
+        {
+            line = trim($0)
+            i = index(line, "=")
+            key = trim(i ? substr(line, 1, i - 1) : line)
+            val = i ? trim(substr(line, i + 1)) : ""
+            if (sec == "trigger") {
+                if (key == "Type") type = val
+                else if (key == "Operation") ops = ops (ops == "" ? "" : "\x1f") val
+                else if (key == "Target") tgts = tgts (tgts == "" ? "" : "\x1f") val
+            } else if (sec == "action") {
+                if (key == "When") when = val
+                else if (key == "Exec") exec = val
+                else if (key == "NeedsTargets") needs = 1
+                else if (key == "Description") desc = val
+            }
+        }
+        END {
+            flush()
+            printf "A\x1e%s\x1e%s\x1e%s\x1e%s\n", when, exec, needs, desc
+        }
+    ' "$1"
+}
+
+status=0
+while IFS= read -r name; do
+    path=${hooks[$name]}
+    case "$name" in "$SELF_PREFIX"*) continue ;; esac
+    # A hook masked by a link to /dev/null.
+    [ "$(readlink -f "$path")" != /dev/null ] || continue
+    [ -s "$path" ] || continue
+
+    wanted=0 fires_anyway=0 when="" exec="" needs="" desc=""
+    while IFS=$'\x1e' read -r kind a b c d; do
+        if [ "$kind" = A ]; then
+            when=$a exec=$b needs=$c desc=$d
+            continue
+        fi
+        IFS=$'\x1f' read -r -a ops <<<"$b"
+        IFS=$'\x1f' read -r -a tgts <<<"$c"
+        printf '%s\n' "${ops[@]}" | grep -qx "$op" || continue
+        case "$a" in
+            Package)
+                if matches "$PKG" "${tgts[@]}"; then
+                    fires_anyway=1
+                elif matches "$AS" "${tgts[@]}"; then
+                    wanted=1
+                fi
+                ;;
+            Path)
+                for f in "${own_files[@]}"; do
+                    if matches "$f" "${tgts[@]}"; then
+                        fires_anyway=1
+                        break
+                    fi
+                done
+                ;;
+        esac
+    done < <(parse_hook "$path")
+
+    if [ "$wanted" -eq 0 ] || [ "$fires_anyway" -eq 1 ]; then
+        continue
+    fi
+    [ "$when" = PostTransaction ] || continue
+    [ -n "$exec" ] || continue
+
+    # alpm splits Exec itself, honouring quotes but expanding nothing, and
+    # runs the result directly: xargs splits the same way.
+    mapfile -d '' argv < <(printf '%s' "$exec" | xargs printf '%s\0')
+    [ "${#argv[@]}" -gt 0 ] || continue
+
+    echo "limine: running ${desc:-$name} (hook for $AS)"
+    if [ -n "$needs" ]; then
+        (cd / && printf '%s\n' "$AS" | "${argv[@]}") || status=1
+    else
+        (cd / && "${argv[@]}" </dev/null) || status=1
+    fi
+done < <(printf '%s\n' "${!hooks[@]}" | LC_ALL=C sort)
+
+exit "$status"

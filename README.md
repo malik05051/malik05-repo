@@ -4,7 +4,7 @@ A pacman repository, built by CI and published through GitHub Releases.
 
 | Package | Built from | Description |
 | --- | --- | --- |
-| [`limine`](limine/) | this repository | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine` under the same name. |
+| [`limine-systemd-bootctl`](limine-systemd-bootctl/) | this repository | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
 | [`limine-timeshift-sync`](limine-timeshift-sync/) | this repository | Lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with, and restores them with that kernel put back. |
 | `systemd-arab-edition` and friends | uploaded by hand | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
 
@@ -22,19 +22,13 @@ $ curl -LO https://github.com/malik05051/malik05-repo/releases/download/repo/mal
 `--lsign-key` is the step that makes the key trusted; without it pacman
 rejects every package as coming from an unknown signer.
 
-Then add this to `/etc/pacman.conf`, **above** `[core]`:
+Then add this to the end of `/etc/pacman.conf`:
 
 ```ini
 [malik05]
 SigLevel = Required
 Server = https://github.com/malik05051/malik05-repo/releases/download/repo
 ```
-
-Its place matters because pacman takes a package from the first repository
-that lists its name, and this repository's `limine` shares its name with
-Arch's. Listed below `[extra]`, Arch's would be installed instead, and an
-installed copy of this one would never be offered an update. The other
-packages here have names of their own and are unaffected by the order.
 
 Arch's shipped `pacman.conf` already sets `SigLevel = Required
 DatabaseOptional` globally, so the line can be left out entirely to inherit
@@ -44,23 +38,26 @@ install whatever the release holds without checking who produced it.
 Then:
 
 ```console
-# pacman -Syu limine
+# pacman -Syu limine-systemd-bootctl
 ```
 
-This package is called `limine`, like Arch's, so it takes the place of Arch's
-and every pacman hook written for Arch's package fires for it too: the one
-limine-entry-tool uses to deploy the loader, the one the ArchWiki suggests,
-and any of your own. Nothing needs setting up beyond what Arch's `limine`
-needed.
+`limine-systemd-bootctl` provides, conflicts with and replaces `limine`, so
+pacman offers to swap it in for Arch's `limine`. Both ship the same paths
+(`/usr/bin/limine`, `/usr/share/limine/`).
 
-### Coming from `limine-systemd-bootctl`
+pacman hooks match a package by its name, never by what it provides, so hooks
+written for Arch's package (`Target = limine`) would not fire for this one.
+This package runs them itself after it is installed or upgraded: the one
+limine-entry-tool deploys the loader with, the one the ArchWiki suggests, and
+any of your own. A hook that would fire for this package anyway is left to
+pacman, so nothing runs twice. Nothing needs setting up beyond what Arch's
+`limine` needed. The exception is hooks that run before a transaction: none
+of the known ones target `limine` by name.
 
-This package used to be called `limine-systemd-bootctl`. Move `[malik05]`
-above `[core]` as shown above, then `pacman -Syu` offers to replace it with
-`limine`. Hooks you added only because of the old name, such as an
-`/etc/pacman.d/hooks/9x-limine-systemd-bootctl.hook` running `limine-install`,
-or a `Target = limine-systemd-bootctl` line, can go: the hooks targeting
-`limine` now cover it.
+For a short while this package was published as `limine`. `pacman -Syu`
+replaces that with `limine-systemd-bootctl`. Hooks you added only because of
+the name, such as an `/etc/pacman.d/hooks/9x-limine-systemd-bootctl.hook`
+running `limine-install` or a `Target = limine-systemd-bootctl` line, can go.
 
 The release also still carries the older `arab.db`, which indexes the
 `systemd-arab-edition` packages alone. It is left in place so that anyone
@@ -83,7 +80,7 @@ demand, then:
 `.db` and `.files` are uploaded as copies of their `.tar.gz` counterparts,
 because `repo-add` makes them symlinks and a release asset cannot be one.
 
-`limine` builds from a git tag rather than a branch, so the
+`limine-systemd-bootctl` builds from a git tag rather than a branch, so the
 package is reproducible and the version the loader reports is stable. Shipping
 new work therefore means tagging the fork and bumping `_tag` in the PKGBUILD;
 commits pushed to `v12.x` alone change nothing here.
@@ -105,8 +102,8 @@ Create a directory named after the package with a `PKGBUILD` in it and push to
 firmware actually loads are separate copies on the ESP, so an upgrade does not
 reach them until something copies them across.
 
-Whatever deploys Arch's `limine` on your machine deploys this one, since the
-hooks match it by name. With limine-entry-tool (installed alongside
+Whatever deploys Arch's `limine` on your machine deploys this one, since this
+package runs the hooks written for it. With limine-entry-tool (installed alongside
 `limine-snapper-sync`, `limine-mkinitcpio-hook` and `limine-dracut-support`),
 every install and upgrade runs `limine-install`, which copies the loader to
 `EFI/limine/limine_x64.efi`, refreshes the backup `limine-snapper-sync`
@@ -225,7 +222,7 @@ and reinstalling the kernel package after the reboot fixes it.
 A multi-profile UKI holds several command lines (normal boot, emergency
 shell, ...) under one signature. Limine can list each profile after `@0` as a
 menu entry of its own, but only for entries that opt in with
-`uki_profiles: yes`. This repository's `limine` ships `limine-uki-profiles` to
+`uki_profiles: yes`. `limine-systemd-bootctl` ships `limine-uki-profiles` to
 set that option safely:
 
 ```console

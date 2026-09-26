@@ -1,0 +1,9 @@
+[Trigger]
+Operation = Install
+Type = Package
+Target = limine-systemd-bootctl
+
+[Action]
+Description = Running the hooks written for Arch's limine...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/limine-hook-forward Install
