@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Timeshift snapshot notification
+Comment=Offers to restore the Timeshift snapshot the system was booted into
+Icon=timeshift
+Exec=limine-timeshift-restore --notify
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

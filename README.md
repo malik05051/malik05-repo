@@ -5,7 +5,7 @@ A pacman repository, built by CI and published through GitHub Releases.
 | Package | Built from | Description |
 | --- | --- | --- |
 | [`limine`](limine/) | this repository | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine` under the same name. |
-| [`limine-timeshift-sync`](limine-timeshift-sync/) | this repository | Lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with. |
+| [`limine-timeshift-sync`](limine-timeshift-sync/) | this repository | Lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with, and restores them with that kernel put back. |
 | `systemd-arab-edition` and friends | uploaded by hand | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
 
 ## Using the repository
@@ -183,8 +183,42 @@ lock before touching the ESP, and each leaves the other's entry alone. Running
 Timeshift and snapper on the same filesystem is still not advisable: both
 restore by replacing `@`, and neither knows about the other's snapshots.
 
-**Booting a snapshot.** Timeshift's snapshots are writable, so booting one
-changes it. Use it to recover, then restore properly with Timeshift.
+**Booting a snapshot.** Booting a snapshot entry is only temporary: the next
+normal boot is your installed system again. Timeshift's snapshots are
+writable, so booting one also changes it. Only `@` comes from the snapshot;
+`/home` is always the current one.
+
+**Snapshot detected!** Log in to a desktop while booted into a snapshot and a
+notification says so, with a **Restore now** button. It needs `libnotify`, and
+`polkit` to ask for the password graphically.
+
+**Restoring.** `limine-timeshift-restore` restores the snapshot you are booted
+into, or asks which one if you are not (it is also in the application menu as
+*Restore Timeshift snapshot*):
+
+```console
+$ limine-timeshift-restore
+$ limine-timeshift-restore 2026-09-26_12-24-42
+```
+
+It shows the snapshot's date, tags, comment and kernels, and whether
+Timeshift will replace `/home` too (`include_btrfs_home_for_restore` in
+Timeshift's settings). Then it asks for confirmation, runs
+`timeshift --restore --skip-grub`, and offers to reboot. Timeshift does the
+restore itself, keeping the system it replaces as a new snapshot. Restoring
+from Timeshift's own window works the same way.
+
+**Kernels after a restore.** A restored system has the kernel modules it was
+snapshotted with, but the ESP holds whatever kernel was installed last.
+Booting that newer kernel against older modules leaves drivers unloadable.
+Timeshift runs `/etc/timeshift/restore-hooks.d/limine-timeshift-sync` after
+every restore. That hook puts the kernel and initramfs the snapshot was taken
+with back into the `limine.conf` entries they came from, updates their hashes,
+and re-enrols the config. If the loader would refuse the result, the old
+files and config go back. The kernels being replaced are kept first, so the
+snapshot Timeshift took before restoring stays bootable from the menu. A
+kernel that was never kept on the ESP cannot be put back; the hook says so,
+and reinstalling the kernel package after the reboot fixes it.
 
 ## Multi-profile UKIs
 

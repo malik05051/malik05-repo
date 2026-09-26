@@ -1,0 +1,15 @@
+#!/bin/sh
+# Timeshift runs this after restoring a snapshot, before the reboot into it.
+# The restored system has the modules of the kernel it was snapshotted with,
+# which is not necessarily the kernel the ESP holds now.
+
+[ -x /usr/bin/limine-timeshift-sync ] || exit 0
+[ -n "${TS_SNAPSHOT_PATH:-}" ] || exit 0
+
+# Timeshift can restore another installation; only this one's ESP is ours.
+[ "$(findmnt -no UUID -T "$TS_SNAPSHOT_PATH")" = "$(findmnt -no UUID /)" ] || exit 0
+
+# Timeshift already has the top level mounted.
+LIMINE_TIMESHIFT_TOP=${TS_SNAPSHOT_PATH%/timeshift-btrfs/snapshots/*}
+export LIMINE_TIMESHIFT_TOP
+exec /usr/bin/limine-timeshift-sync --restore-kernels "$(basename "$TS_SNAPSHOT_PATH")"

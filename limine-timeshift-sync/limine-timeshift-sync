@@ -25,26 +25,42 @@ ENROLL_COMMAND="${ENROLL_COMMAND:-limine-enroll-config}"
 
 DRY_RUN=0
 REMOVE=0
+RESTORE_NAME=""
 
 usage() {
     cat <<EOF
 Usage: limine-timeshift-sync [--dry-run] [--remove]
+       limine-timeshift-sync --restore-kernels <snapshot>
 
   --dry-run   Show the entry that would be written and change nothing.
   --remove    Take the Timeshift entry out of limine.conf and delete the
               kernels kept for it.
+  --restore-kernels <snapshot>
+              Put the kernels a snapshot was taken with back into the
+              limine.conf entries they came from. Timeshift runs this after
+              restoring a snapshot, so the restored system does not boot a
+              kernel whose modules it lacks.
 
 Settings are read from $CONF.
 EOF
 }
 
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --remove) REMOVE=1 ;;
+        --restore-kernels)
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                usage >&2
+                exit 2
+            fi
+            RESTORE_NAME=$2
+            shift
+            ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
+    shift
 done
 
 if [ -r "$CONF" ]; then
@@ -126,7 +142,9 @@ resolve_path() {
 }
 
 # One line per Linux-protocol entry: kernel path, command line and the module
-# paths joined by \x1f. Entries this tool wrote are left out.
+# paths joined by \x1f, the fields split by \x1e: read splits runs of a
+# whitespace separator such as a tab as one, and a field may be empty. Entries
+# this tool wrote are left out.
 read_entries() {
     local config=$1
     awk -v marker="$MARKER" '
@@ -145,7 +163,7 @@ read_entries() {
             if (proto == "linux" && kpath != "") {
                 out = ""
                 for (j = 0; j < nmods; j++) out = out (j ? "\x1f" : "") mods[j]
-                print kpath "\t" cmd "\t" out
+                print kpath "\x1e" cmd "\x1e" out
             }
             reset()
         }
@@ -247,11 +265,283 @@ enrolled_loaders() {
 
 b2() { b2sum "$1" | cut -d' ' -f1; }
 
+# The btrfs top level, where Timeshift keeps its snapshots.
+mount_top() {
+    local src dev
+    [ -z "$TOP" ] || return 0
+    if [ -n "${LIMINE_TIMESHIFT_TOP:-}" ]; then
+        TOP=$LIMINE_TIMESHIFT_TOP
+        return 0
+    fi
+    [ "$(findmnt -no FSTYPE /)" = btrfs ] || die "/ is not on btrfs; Timeshift snapshots in btrfs mode need it"
+    src=$(findmnt -no SOURCE /)
+    dev=${src%%\[*}
+    TOP=$(mktemp -d /run/limine-timeshift-sync.top.XXXXXX)
+    mount -o ro,subvolid=5 "$dev" "$TOP"
+    MOUNTED=1
+}
+
+# Which entry a kept kernel was copied from, as the paths limine.conf names:
+# --restore-kernels writes it back there.
+write_source() {
+    local kpath=$1 kmods=$2 m
+    local -a mods
+    printf 'kernel\t%s\n' "${kpath%%#*}"
+    IFS=$'\x1f' read -r -a mods <<<"$kmods"
+    for m in "${mods[@]}"; do
+        printf 'module\t%s\n' "${m%%#*}"
+    done
+}
+
+# Kernels kept before that record existed get one from the entry still
+# booting the very same file, if any does.
+backfill_source() {
+    local kept=$1 kpath kcmd kmods kfile n
+    local -a mods
+    n=$(find "$kept" -maxdepth 1 -name 'module-*' | wc -l)
+    while IFS=$'\x1e' read -r kpath kcmd kmods; do
+        kfile=$(resolve_path "$ESP" "$kpath") || continue
+        if [ ! -f "$kfile" ] || ! cmp -s "$kfile" "$kept/vmlinuz"; then
+            continue
+        fi
+        mods=()
+        [ -z "$kmods" ] || IFS=$'\x1f' read -r -a mods <<<"$kmods"
+        [ "${#mods[@]}" -eq "$n" ] || continue
+        write_source "$kpath" "$kmods" >"$kept/source.new"
+        mv "$kept/source.new" "$kept/source"
+        return 0
+    done <"$entries"
+}
+
+check_enrollable() {
+    if [ -n "$(enrolled_loaders "$ESP")" ] && ! command -v "${ENROLL_COMMAND%% *}" >/dev/null 2>&1; then
+        die "the config is enrolled but $ENROLL_COMMAND is not available; not changing a config the loader would then refuse"
+    fi
+}
+
+# Replace limine.conf with $1 and re-enrol it if the loader is enrolled.
+# Returns 1, with the previous config back in place, if the loader ends up
+# enrolled for the previous config only.
+commit_config() {
+    local new=$1 backup="$CONFIG.timeshift.bak" want old got l bad=0
+    local -a loaders
+    check_enrollable
+    mapfile -t loaders < <(enrolled_loaders "$ESP")
+
+    cp "$CONFIG" "$backup"
+    cp "$new" "$CONFIG.tmp"
+    sync -f "$CONFIG.tmp" 2>/dev/null || sync
+    mv -f "$CONFIG.tmp" "$CONFIG"
+    sync -f "$CONFIG" 2>/dev/null || sync
+    note "updated $CONFIG"
+
+    [ "${#loaders[@]}" -gt 0 ] || return 0
+
+    # Enrolment may take the same lock itself, and would wait on this one
+    # forever: released for the duration, and the descriptor not passed on.
+    flock --unlock 200
+    $ENROLL_COMMAND 200>&- || warn "$ENROLL_COMMAND failed"
+    flock --timeout 60 200 || die "timed out waiting for $LOCK after enrolling"
+
+    # Whatever happened above, the loader must accept the config on disk: it
+    # panics at boot on a mismatch.
+    want=$(b2 "$CONFIG")
+    old=$(b2 "$backup")
+    for l in "${loaders[@]}"; do
+        got=$(enrolled_hash "$l")
+        if [ "$got" = "$want" ]; then
+            continue
+        elif [ "$got" = "$old" ]; then
+            bad=1
+        else
+            die "${l#"$ESP"} is enrolled for neither the old nor the new config; run $ENROLL_COMMAND by hand before rebooting"
+        fi
+    done
+    if [ "$bad" -eq 1 ]; then
+        cp "$backup" "$CONFIG"
+        sync -f "$CONFIG" 2>/dev/null || sync
+        return 1
+    fi
+    return 0
+}
+
+# Point the entries that booted a snapshot's kernels at the time it was taken
+# back at those kernels, with the config re-enrolled; the files and config go
+# back as they were if the loader would not accept it.
+restore_kernels() {
+    local name=$1 snaproot moddir ver pkgbase sha kept kind path dest src i
+    local kpath kcmd kmods kfile live m base missing="" plan="$WORK/plan"
+    local -A replaced=()
+    local -a mods
+
+    mount_top
+    snaproot="$TOP/timeshift-btrfs/snapshots/$name/@"
+    [ -d "$snaproot" ] || die "no Timeshift snapshot named $name"
+
+    entries="$WORK/entries"
+    read_entries "$CONFIG" >"$entries"
+    : >"$plan"
+
+    for moddir in "$snaproot"/usr/lib/modules/*/; do
+        moddir=${moddir%/}
+        [ -f "$moddir/vmlinuz" ] || continue
+        ver=$(basename "$moddir")
+        pkgbase=$(head -n1 "$moddir/pkgbase" 2>/dev/null || true)
+        pkgbase=${pkgbase:-linux}
+        sha=$(sha256sum "$moddir/vmlinuz" | cut -d' ' -f1)
+        kept="$HISTORY/$sha"
+
+        if [ ! -f "$kept/vmlinuz" ] || [ ! -f "$kept/source" ]; then
+            live=""
+            while IFS=$'\x1e' read -r kpath kcmd kmods; do
+                kfile=$(resolve_path "$ESP" "$kpath") || continue
+                if [ -f "$kfile" ] && [ "$(kernel_version "$kfile" || true)" = "$ver" ]; then
+                    live=1
+                    break
+                fi
+            done <"$entries"
+            if [ -z "$live" ]; then
+                warn "$name: $pkgbase $ver is not kept on the ESP with a record of the entry it came from"
+                missing="$missing $pkgbase"
+            fi
+            continue
+        fi
+
+        i=0
+        while IFS=$'\t' read -r kind path; do
+            case "$kind" in
+                kernel) src="$kept/vmlinuz" ;;
+                module) src="$kept/module-$i"; i=$((i + 1)) ;;
+                *) continue ;;
+            esac
+            dest=$(resolve_path "$ESP" "$path") || { warn "$name: cannot follow $path"; continue; }
+            [ -f "$src" ] || { warn "$name: $src is missing"; continue; }
+            if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
+                continue
+            fi
+            printf '%s\t%s\t%s\n' "$dest" "$src" "$path" >>"$plan"
+        done <"$kept/source"
+    done
+
+    if [ -s "$plan" ]; then
+        check_enrollable
+        sort -u -t $'\t' -k1,1 "$plan" -o "$plan"
+
+        # Staged next to the files they replace, so that nothing on the ESP
+        # changes until the config naming them with their new hashes exists.
+        : >"$WORK/hashes"
+        while IFS=$'\t' read -r dest src path; do
+            mkdir -p "$(dirname "$dest")"
+            cp "$src" "$dest.lts-new"
+            sync -f "$dest.lts-new" 2>/dev/null || sync
+            printf '%s\t%s\n' "$path" "$(b2 "$dest.lts-new")" >>"$WORK/hashes"
+            replaced[$path]=1
+        done <"$plan"
+
+        awk -v hashes="$WORK/hashes" -v unmatched="$WORK/unmatched" '
+            BEGIN {
+                while ((getline line < hashes) > 0) {
+                    split(line, f, "\t")
+                    h[f[1]] = f[2]
+                }
+            }
+            {
+                if (match(tolower($0), /^[ \t]*(kernel_path|path|image_path|module_path)[ \t]*:[ \t]*/)) {
+                    pre = substr($0, 1, RLENGTH)
+                    val = substr($0, RLENGTH + 1)
+                    sub(/[ \t\r]+$/, "", val)
+                    base = val
+                    n = split(val, parts, "#")
+                    if (n > 1 && length(parts[n]) == 128) {
+                        base = substr(val, 1, length(val) - 129)
+                    }
+                    if (base in h) {
+                        print pre base "#" h[base]
+                        used[base] = 1
+                        next
+                    }
+                }
+                print
+            }
+            END {
+                for (b in h) {
+                    if (!(b in used)) print b > unmatched
+                }
+            }
+        ' "$CONFIG" >"$WORK/restored.conf"
+
+        if [ -s "$WORK/unmatched" ]; then
+            while IFS=$'\t' read -r dest src path; do
+                rm -f "$dest.lts-new"
+            done <"$plan"
+            die "limine.conf no longer names $(head -n1 "$WORK/unmatched"); not restoring kernels. After rebooting, reinstall the kernel package instead"
+        fi
+
+        while IFS=$'\t' read -r dest src path; do
+            if [ -f "$dest" ]; then
+                cp -p "$dest" "$dest.lts-old"
+            fi
+            mv -f "$dest.lts-new" "$dest"
+        done <"$plan"
+        sync
+
+        if ! commit_config "$WORK/restored.conf"; then
+            while IFS=$'\t' read -r dest src path; do
+                if [ -f "$dest.lts-old" ]; then
+                    mv -f "$dest.lts-old" "$dest"
+                else
+                    rm -f "$dest"
+                fi
+            done <"$plan"
+            sync
+            die "the loader was not enrolled for the new config, so the old kernels and config have been put back"
+        fi
+
+        while IFS=$'\t' read -r dest src path; do
+            rm -f "$dest.lts-old"
+            note "$name: restored ${dest#"$ESP"}"
+        done <"$plan"
+
+        # An entry sharing a restored kernel but not its initramfs still has
+        # one built for the kernel that was replaced.
+        read_entries "$CONFIG" >"$entries"
+        while IFS=$'\x1e' read -r kpath kcmd kmods; do
+            [ -n "${replaced[${kpath%%#*}]:-}" ] || continue
+            mods=()
+            [ -z "$kmods" ] || IFS=$'\x1f' read -r -a mods <<<"$kmods"
+            for m in "${mods[@]}"; do
+                base=${m%%#*}
+                case "$base" in *ucode*) continue ;; esac
+                if [ -z "${replaced[$base]:-}" ]; then
+                    warn "$name: ${base} was built for the kernel that was replaced; reinstall the kernel package after rebooting to rebuild it"
+                fi
+            done
+        done <"$entries"
+    else
+        note "$name: the ESP already holds the kernels it needs"
+    fi
+
+    if [ -n "$missing" ]; then
+        warn "$name: after rebooting, reinstall$missing so the ESP holds the kernel the restored system has modules for"
+    fi
+}
+
 ESP=$(find_esp)
 CONFIG=$(find_config "$ESP")
 HISTORY="$ESP/$HISTORY_NAME"
 HISTORY_REL="/$HISTORY_NAME"
 WORK=$(mktemp -d /run/limine-timeshift-sync.work.XXXXXX)
+
+if [ -n "$RESTORE_NAME" ]; then
+    if [ "$DRY_RUN" -eq 1 ] || [ "$REMOVE" -eq 1 ]; then
+        die "--restore-kernels cannot be combined with --dry-run or --remove"
+    fi
+    # Every snapshot's kernels are kept first, the one Timeshift has just taken
+    # of the system being replaced included: once the entries point at the
+    # restored kernels, the ones they point at now are nowhere else on the ESP.
+    LIMINE_TIMESHIFT_ALSO=$RESTORE_NAME "$0" \
+        || warn "updating the snapshot entries failed; the snapshot taken before this restore may not boot from the menu"
+fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
     mkdir -p /run/lock
@@ -259,21 +549,17 @@ if [ "$DRY_RUN" -eq 0 ]; then
     flock --timeout 60 200 || die "timed out waiting for $LOCK"
 fi
 
+if [ -n "$RESTORE_NAME" ]; then
+    restore_kernels "$RESTORE_NAME"
+    exit 0
+fi
+
 block="$WORK/block"
 : >"$block"
 declare -A keep=()
 
 if [ "$REMOVE" -eq 0 ]; then
-    if [ -n "${LIMINE_TIMESHIFT_TOP:-}" ]; then
-        TOP=$LIMINE_TIMESHIFT_TOP
-    else
-        [ "$(findmnt -no FSTYPE /)" = btrfs ] || die "/ is not on btrfs; Timeshift snapshots in btrfs mode need it"
-        src=$(findmnt -no SOURCE /)
-        dev=${src%%\[*}
-        TOP=$(mktemp -d /run/limine-timeshift-sync.top.XXXXXX)
-        mount -o ro,subvolid=5 "$dev" "$TOP"
-        MOUNTED=1
-    fi
+    mount_top
 
     snapdir="$TOP/timeshift-btrfs/snapshots"
     entries="$WORK/entries"
@@ -284,6 +570,13 @@ if [ "$REMOVE" -eq 0 ]; then
             [ -d "$d" ] && basename "$(dirname "$d")"
         done | sort -r | head -n "$MAX_SNAPSHOTS"
     )
+    # Set by --restore-kernels, which needs the kernels of a snapshot that may
+    # be older than the newest MAX_SNAPSHOTS.
+    also=${LIMINE_TIMESHIFT_ALSO:-}
+    if [ -n "$also" ] && [ -d "$snapdir/$also/@" ] \
+    && ! printf '%s\n' "${snapshots[@]}" | grep -qxF -- "$also"; then
+        snapshots+=("$also")
+    fi
 
     if [ "${#snapshots[@]}" -eq 0 ]; then
         note "no Timeshift btrfs snapshots under $snapdir"
@@ -319,12 +612,12 @@ if [ "$REMOVE" -eq 0 ]; then
 
             if [ ! -f "$kept/vmlinuz" ]; then
                 match=""
-                while IFS=$'\t' read -r kpath kcmd kmods; do
+                while IFS=$'\x1e' read -r kpath kcmd kmods; do
                     kfile=$(resolve_path "$ESP" "$kpath") || continue
                     [ -f "$kfile" ] || continue
                     if [ "$(sha256sum "$kfile" | cut -d' ' -f1)" = "$sha" ] \
                     || [ "$(kernel_version "$kfile" || true)" = "$ver" ]; then
-                        match="$kfile"$'\t'"$kcmd"$'\t'"$kmods"
+                        match="$kfile"$'\x1e'"$kcmd"$'\x1e'"$kmods"$'\x1e'"$kpath"
                         break
                     fi
                 done <"$entries"
@@ -339,7 +632,7 @@ if [ "$REMOVE" -eq 0 ]; then
                     continue
                 fi
 
-                IFS=$'\t' read -r kfile kcmd kmods <<<"$match"
+                IFS=$'\x1e' read -r kfile kcmd kmods kpath <<<"$match"
                 if [ "$DRY_RUN" -eq 1 ]; then
                     note "$name: would keep $pkgbase $ver from ${kfile#"$ESP"}"
                     kept="$WORK/preview/$sha"
@@ -355,11 +648,16 @@ if [ "$REMOVE" -eq 0 ]; then
                     i=$((i + 1))
                 done
                 printf '%s\n' "$kcmd" >"$kept.new/cmdline"
+                write_source "$kpath" "$kmods" >"$kept.new/source"
                 sync -f "$kept.new/vmlinuz" 2>/dev/null || sync
                 rm -rf "$kept"
                 mv "$kept.new" "$kept"
                 usage_now=$(df --output=pcent "$ESP" 2>/dev/null | tail -n1 | tr -dc '0-9')
                 usage_now=${usage_now:-0}
+            fi
+
+            if [ ! -f "$kept/source" ] && [ "$DRY_RUN" -eq 0 ]; then
+                backfill_source "$kept"
             fi
 
             keep[$sha]=1
@@ -422,48 +720,7 @@ if [ "$(normalise "$new")" != "$(normalise "$CONFIG")" ]; then
 fi
 
 if [ "$changed" -eq 1 ]; then
-    mapfile -t loaders < <(enrolled_loaders "$ESP")
-    if [ "${#loaders[@]}" -gt 0 ] && ! command -v "${ENROLL_COMMAND%% *}" >/dev/null 2>&1; then
-        die "the config is enrolled but $ENROLL_COMMAND is not available; not changing a config the loader would then refuse"
-    fi
-
-    backup="$CONFIG.timeshift.bak"
-    cp "$CONFIG" "$backup"
-    cp "$new" "$CONFIG.tmp"
-    sync -f "$CONFIG.tmp" 2>/dev/null || sync
-    mv -f "$CONFIG.tmp" "$CONFIG"
-    sync -f "$CONFIG" 2>/dev/null || sync
-    note "updated $CONFIG"
-
-    if [ "${#loaders[@]}" -gt 0 ]; then
-        # Enrolment may take the same lock itself, and would wait on this one
-        # forever: released for the duration, and the descriptor not passed on.
-        flock --unlock 200
-        $ENROLL_COMMAND 200>&- || warn "$ENROLL_COMMAND failed"
-        flock --timeout 60 200 || die "timed out waiting for $LOCK after enrolling"
-
-        # Whatever happened above, the loader must accept the config on disk:
-        # it panics at boot on a mismatch. If only the old config matches, the
-        # old config goes back.
-        want=$(b2 "$CONFIG")
-        old=$(b2 "$backup")
-        bad=0
-        for l in "${loaders[@]}"; do
-            got=$(enrolled_hash "$l")
-            if [ "$got" = "$want" ]; then
-                continue
-            elif [ "$got" = "$old" ]; then
-                bad=1
-            else
-                die "${l#"$ESP"} is enrolled for neither the old nor the new config; run $ENROLL_COMMAND by hand before rebooting"
-            fi
-        done
-        if [ "$bad" -eq 1 ]; then
-            cp "$backup" "$CONFIG"
-            sync -f "$CONFIG" 2>/dev/null || sync
-            die "the loader was not enrolled for the new config, so the old one has been put back"
-        fi
-    fi
+    commit_config "$new" || die "the loader was not enrolled for the new config, so the old one has been put back"
 fi
 
 # Kept kernels no entry refers to any more.
