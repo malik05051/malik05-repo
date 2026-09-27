@@ -1,8 +1,13 @@
 name: Reindex the repository database
 
-# Rebuilds the database from every package published in the release, rather
-# than from the packages one build happened to produce. Run it after adding
-# packages to the release by hand, or to recover a database that has drifted.
+# Rebuilds the database from every package published in the projects'
+# "pacman" releases (see releases.conf), rather than from the packages one
+# build happened to produce. Run it after uploading packages to one of those
+# releases by hand, or to recover a database that has drifted.
+#
+# Packages still published in this repository's own release, where they all
+# used to be, are moved to their projects' releases first and then deleted
+# here, so that this release holds the database and nothing else.
 on:
   workflow_dispatch:
 
@@ -12,6 +17,7 @@ permissions:
 env:
   REPO_NAME: malik05
   RELEASE_TAG: repo
+  PACKAGES_TAG: pacman
   GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
 
 jobs:
@@ -30,6 +36,9 @@ jobs:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed git github-cli gnupg
 
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Import the signing key
         if: env.GPG_PRIVATE_KEY != ''
         run: |
@@ -41,12 +50,30 @@ jobs:
 
       - name: Fetch the published packages
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          OWN_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          mkdir -p /tmp/pkgs
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --dir /tmp/pkgs --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig'
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the RELEASES_TOKEN secret is not set; see the README"
+            exit 1
+          fi
+          mkdir -p /tmp/pkgs /tmp/legacy
+
+          # A project whose release does not exist yet simply has nothing.
+          awk '!/^[[:space:]]*(#|$)/ { print $2 }' releases.conf | sort -u | while read -r repo; do
+            gh release download "$PACKAGES_TAG" --repo "$repo" --dir /tmp/pkgs --clobber \
+              --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig' || true
+          done
+
+          GH_TOKEN=$OWN_TOKEN gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/legacy --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig' || true
+
+          # A package already in its project's release keeps that copy.
+          for f in /tmp/legacy/*; do
+            [ -e "$f" ] || continue
+            [ -e "/tmp/pkgs/$(basename "$f")" ] || mv "$f" /tmp/pkgs/
+          done
           ls -l /tmp/pkgs
 
       - name: Sign whatever is not signed yet
@@ -57,6 +84,7 @@ jobs:
           # SigLevel = Required pacman refuses those, so sign them here rather
           # than leave half the repository uninstallable.
           for pkg in /tmp/pkgs/*.pkg.tar.zst; do
+            [ -e "$pkg" ] || continue
             if [ ! -e "$pkg.sig" ]; then
               echo "signing $(basename "$pkg")"
               gpg --batch --yes --detach-sign --no-armor -u "$GPG_KEY_ID" "$pkg"
@@ -68,12 +96,19 @@ jobs:
           set -eu
           mkdir -p /tmp/repo
 
-          # Superseded versions stay in the release as assets, so index only
+          # Superseded versions stay in the releases as assets, so index only
           # the newest of each package name. pkgname is read out of .PKGINFO
           # because a filename cannot be split reliably: plenty of package
-          # names contain the dash the fields are separated by.
+          # names contain the dash the fields are separated by. A package
+          # releases.conf does not map, such as one under a retired name, is
+          # left out.
           declare -A newest
           for pkg in /tmp/pkgs/*.pkg.tar.zst; do
+            [ -e "$pkg" ] || continue
+            if ! .github/scripts/release-repo "$pkg" >/dev/null; then
+              echo "skipping $(basename "$pkg"): releases.conf does not map it"
+              continue
+            fi
             info="$(bsdtar -xOqf "$pkg" .PKGINFO)"
             name="$(awk -F' = ' '$1 == "pkgname" { print $2 }' <<<"$info")"
             ver="$(awk -F' = ' '$1 == "pkgver" { print $2 }' <<<"$info")"
@@ -94,17 +129,15 @@ jobs:
             echo "indexing $name ${newest[$name]%%|*}"
             keep+=("${newest[$name]#*|}")
           done
+          printf '%s\n' "${keep[@]}" >/tmp/indexed
 
           # repo-add records a package's signature only if it sits beside it.
+          repo_pkgs=()
           for pkg in "${keep[@]}"; do
             if [ -e "$pkg.sig" ]; then
               cp "$pkg.sig" /tmp/repo/
             fi
             cp "$pkg" /tmp/repo/
-          done
-
-          repo_pkgs=()
-          for pkg in "${keep[@]}"; do
             repo_pkgs+=("/tmp/repo/$(basename "$pkg")")
           done
 
@@ -129,9 +162,19 @@ jobs:
             done
           done
 
-          # The packages themselves are already published; only signatures
-          # minted just now and the database need uploading.
-          rm -f /tmp/repo/*.pkg.tar.zst
+          rm -f /tmp/repo/*.pkg.tar.zst /tmp/repo/*.pkg.tar.zst.sig /tmp/repo/*.old /tmp/repo/*.old.sig
+          ls -l /tmp/repo
+
+      # Every indexed package, with the signature minted above if it had none,
+      # ends up in its project's release, whichever release it was found in.
+      - name: Publish the indexed packages in their projects' releases
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          set -eu
+          while read -r pkg; do
+            .github/scripts/publish-package "$pkg"
+          done </tmp/indexed
 
       - name: Publish the database
         env:
@@ -140,3 +183,16 @@ jobs:
           set -eu
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             /tmp/repo/* --clobber
+
+      # Only once the database pointing at the projects' releases is out.
+      - name: Leave only the database in this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+            grep -E '\.pkg\.tar\.zst(\.sig)?$|\.old(\.sig)?$' |
+            while read -r asset; do
+              gh release delete-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes
+              echo "deleted $asset"
+            done

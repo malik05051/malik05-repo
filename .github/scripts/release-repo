@@ -1,0 +1,20 @@
+#!/bin/bash
+# Prints the repository whose "pacman" release holds the package file $1, as
+# releases.conf maps it, or fails if nothing does.
+
+set -eu
+
+file=$(basename "$1")
+while read -r glob repo; do
+    case "$glob" in
+        ''|'#'*) continue ;;
+    esac
+    # shellcheck disable=SC2254
+    case "$file" in
+        $glob)
+            echo "$repo"
+            exit 0
+            ;;
+    esac
+done <"$(dirname "$0")/../../releases.conf"
+exit 1
