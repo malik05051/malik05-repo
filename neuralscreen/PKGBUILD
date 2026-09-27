@@ -1,8 +1,8 @@
 # Maintainer: Malik <belhajjimalik1@gmail.com>
 #
-# NeuralScreen from git. The version is `git describe` style: base version
-# from build_release.py, then the commit count and hash, so a rebuild after
-# a pull is always newer than the one before it.
+# NeuralScreen from git, pinned to _commit. To update, set _commit to the
+# new commit and pkgver's r<count>.g<hash> to what `git rev-list --count
+# <commit>` and `git rev-parse --short=7 <commit>` print for it.
 #
 #   cd packaging/arch && makepkg -si
 #
@@ -10,7 +10,8 @@
 # looks for it at ~/.local/share/neuralscreen/nvngx_dlssnr.dll (or NS_NR_DLL)
 # and `neuralscreen --setup` prepares the Proton prefix once.
 pkgname=neuralscreen
-pkgver=1.8.2.r340.gc2c5081
+pkgver=1.8.2.r345.ge9672d4
+_commit=e9672d40116e7dd9d815b3b304b51a9615715440
 pkgrel=1
 pkgdesc="NVIDIA's DLSS 5 neural renderer applied to the whole Wayland desktop"
 arch=('x86_64')
@@ -32,20 +33,13 @@ optdepends=('xdg-desktop-portal-hyprland: screen capture and global shortcuts on
             # the official repositories, so a hard dependency cannot be
             # resolved in a plain Arch build container at all.
             'umu-launcher: bootstraps the Proton prefix for `neuralscreen --setup`')
-source=("git+${url}.git#branch=main"
+source=("git+${url}.git#commit=${_commit}"
         "neuralscreen"
         "neuralscreen.desktop")
 sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 # What the package cannot provide, said at the moment it becomes relevant.
 install=neuralscreen.install
-
-pkgver() {
-    cd "$srcdir/DLSS5-NeuralScreen-Linux"
-    local base
-    base="$(sed -n 's/^VERSION = "\(.*\)"/\1/p' build_release.py)"
-    printf '%s.r%s.g%s' "$base" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
-}
 
 build() {
     cd "$srcdir/DLSS5-NeuralScreen-Linux"
