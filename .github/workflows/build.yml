@@ -11,9 +11,8 @@ permissions:
 env:
   # pacman.conf [section] name, and the basename of the database files.
   REPO_NAME: malik05
-  # Fixed release in this repository the database is published under. The
-  # packages go to the "pacman" release of their own project, as
-  # releases.conf maps them.
+  # Fixed release in this repository that the packages and database are
+  # published under.
   RELEASE_TAG: repo
   # Set the GPG_PRIVATE_KEY secret to have packages and the database signed.
   # Everything below degrades to publishing them unsigned when it is absent.
@@ -94,22 +93,6 @@ jobs:
             gpg --batch --yes --detach-sign --no-armor -u "$GPG_KEY_ID" "$pkg"
           done
 
-      # GITHUB_TOKEN can only write to this repository. RELEASES_TOKEN is a
-      # token allowed to write the contents of every repository in
-      # releases.conf.
-      - name: Publish the packages in their projects' releases
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          set -eu
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::the RELEASES_TOKEN secret is not set; see the README"
-            exit 1
-          fi
-          for pkg in /tmp/out/*.pkg.tar.zst; do
-            .github/scripts/publish-package "$pkg"
-          done
-
       - name: Update the repository database
         env:
           GH_TOKEN: ${{ github.token }}
@@ -121,8 +104,8 @@ jobs:
 
           # Carry the published database forward rather than rebuilding it, so
           # that packages this run did not build keep their entries. Their
-          # files stay in their releases untouched, which is what those
-          # entries point at. Absent on the very first run.
+          # files stay in the release untouched, which is what those entries
+          # point at. Absent on the very first run.
           gh release download "$RELEASE_TAG" --dir /tmp/repo \
             --pattern "$REPO_NAME.db.tar.gz" \
             --pattern "$REPO_NAME.files.tar.gz" || true
@@ -161,13 +144,11 @@ jobs:
             done
           done
 
-          # The packages are published in their projects' releases; only the
-          # database and the key belong here.
-          rm -f /tmp/repo/*.pkg.tar.zst /tmp/repo/*.pkg.tar.zst.sig /tmp/repo/*.old /tmp/repo/*.old.sig
+          rm -f /tmp/repo/*.old /tmp/repo/*.old.sig
 
           ls -l /tmp/repo
 
-      - name: Publish the database
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -175,5 +156,5 @@ jobs:
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
             gh release create "$RELEASE_TAG" \
               --title "Package repository" \
-              --notes "The pacman database. The packages are in their projects' releases; add this repository as described in the README."
+              --notes "Built by CI. Add this repository as described in the README."
           gh release upload "$RELEASE_TAG" /tmp/repo/* --clobber

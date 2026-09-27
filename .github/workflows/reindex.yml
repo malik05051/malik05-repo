@@ -1,13 +1,11 @@
 name: Reindex the repository database
 
-# Rebuilds the database from every package published in the projects'
-# "pacman" releases (see releases.conf), rather than from the packages one
-# build happened to produce. Run it after uploading packages to one of those
-# releases by hand, or to recover a database that has drifted.
+# Rebuilds the database from every package published in the release, rather
+# than from the packages one build happened to produce. Run it after adding
+# packages to the release by hand, or to recover a database that has drifted.
 #
-# Packages still published in this repository's own release, where they all
-# used to be, are moved to their projects' releases first and then deleted
-# here, so that this release holds the database and nothing else.
+# Packages still in the projects' "pacman" releases, where they were published
+# for a while, are brought back into this release first.
 on:
   workflow_dispatch:
 
@@ -18,6 +16,8 @@ env:
   REPO_NAME: malik05
   RELEASE_TAG: repo
   PACKAGES_TAG: pacman
+  # Earlier names of limine-extra, never to be indexed again.
+  RETIRED: limine limine-systemd-bootctl
   GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
 
 jobs:
@@ -50,29 +50,27 @@ jobs:
 
       - name: Fetch the published packages
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-          OWN_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::the RELEASES_TOKEN secret is not set; see the README"
-            exit 1
-          fi
-          mkdir -p /tmp/pkgs /tmp/legacy
+          mkdir -p /tmp/pkgs
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir /tmp/pkgs --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig' || true
+          # Only what is missing from the release, and the signatures minted
+          # below, need uploading afterwards.
+          ls /tmp/pkgs >/tmp/published
 
-          # A project whose release does not exist yet simply has nothing.
-          awk '!/^[[:space:]]*(#|$)/ { print $2 }' releases.conf | sort -u | while read -r repo; do
-            gh release download "$PACKAGES_TAG" --repo "$repo" --dir /tmp/pkgs --clobber \
+          # The projects are public, so this token can read their releases.
+          for repo in malik05051/Limine-extra malik05051/limine-timeshift-sync \
+                      malik05051/DLSS5-NeuralScreen-Linux malik05051/systemd-arab-edition; do
+            mkdir -p /tmp/project
+            gh release download "$PACKAGES_TAG" --repo "$repo" --dir /tmp/project \
               --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig' || true
-          done
-
-          GH_TOKEN=$OWN_TOKEN gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --dir /tmp/legacy --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig' || true
-
-          # A package already in its project's release keeps that copy.
-          for f in /tmp/legacy/*; do
-            [ -e "$f" ] || continue
-            [ -e "/tmp/pkgs/$(basename "$f")" ] || mv "$f" /tmp/pkgs/
+            for f in /tmp/project/*; do
+              [ -e "$f" ] || continue
+              [ -e "/tmp/pkgs/$(basename "$f")" ] || mv "$f" /tmp/pkgs/
+            done
+            rm -rf /tmp/project
           done
           ls -l /tmp/pkgs
 
@@ -96,19 +94,13 @@ jobs:
           set -eu
           mkdir -p /tmp/repo
 
-          # Superseded versions stay in the releases as assets, so index only
+          # Superseded versions stay in the release as assets, so index only
           # the newest of each package name. pkgname is read out of .PKGINFO
           # because a filename cannot be split reliably: plenty of package
-          # names contain the dash the fields are separated by. A package
-          # releases.conf does not map, such as one under a retired name, is
-          # left out.
+          # names contain the dash the fields are separated by.
           declare -A newest
           for pkg in /tmp/pkgs/*.pkg.tar.zst; do
             [ -e "$pkg" ] || continue
-            if ! .github/scripts/release-repo "$pkg" >/dev/null; then
-              echo "skipping $(basename "$pkg"): releases.conf does not map it"
-              continue
-            fi
             info="$(bsdtar -xOqf "$pkg" .PKGINFO)"
             name="$(awk -F' = ' '$1 == "pkgname" { print $2 }' <<<"$info")"
             ver="$(awk -F' = ' '$1 == "pkgver" { print $2 }' <<<"$info")"
@@ -116,6 +108,10 @@ jobs:
             # whose .PKGINFO could not be read is passed over instead.
             if [ -z "$name" ] || [ -z "$ver" ]; then
               echo "skipping $(basename "$pkg"): no pkgname/pkgver in .PKGINFO"
+              continue
+            fi
+            if [[ " $RETIRED " == *" $name "* ]]; then
+              echo "skipping $(basename "$pkg"): $name is retired"
               continue
             fi
             if [ -z "${newest[$name]:-}" ] \
@@ -129,7 +125,6 @@ jobs:
             echo "indexing $name ${newest[$name]%%|*}"
             keep+=("${newest[$name]#*|}")
           done
-          printf '%s\n' "${keep[@]}" >/tmp/indexed
 
           # repo-add records a package's signature only if it sits beside it.
           repo_pkgs=()
@@ -162,21 +157,13 @@ jobs:
             done
           done
 
-          rm -f /tmp/repo/*.pkg.tar.zst /tmp/repo/*.pkg.tar.zst.sig /tmp/repo/*.old /tmp/repo/*.old.sig
+          rm -f /tmp/repo/*.old /tmp/repo/*.old.sig
+          while read -r f; do
+            rm -f "/tmp/repo/$f"
+          done </tmp/published
           ls -l /tmp/repo
 
-      # Every indexed package, with the signature minted above if it had none,
-      # ends up in its project's release, whichever release it was found in.
-      - name: Publish the indexed packages in their projects' releases
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-        run: |
-          set -eu
-          while read -r pkg; do
-            .github/scripts/publish-package "$pkg"
-          done </tmp/indexed
-
-      - name: Publish the database
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -184,17 +171,31 @@ jobs:
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             /tmp/repo/* --clobber
 
-      # Only once the database pointing at the projects' releases is out.
       # repo-add writes .tar.gz databases; any other copy was uploaded by hand
       # and is stale by now.
-      - name: Leave only the database in this release
+      - name: Delete stale database copies
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-            grep -E '\.pkg\.tar\.zst(\.sig)?$|\.old(\.sig)?$|\.(db|files)\.tar\.(zst|xz|bz2)(\.sig)?$' |
+            { grep -E '\.old(\.sig)?$|\.(db|files)\.tar\.(zst|xz|bz2)(\.sig)?$' || true; } |
             while read -r asset; do
               gh release delete-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes
               echo "deleted $asset"
             done
+
+      - name: Delete the superseded limine-timeshift-sync from Limine-extra
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          OWN_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release view "$PACKAGES_TAG" --repo malik05051/Limine-extra --json assets --jq '.assets[].name' |
+            { grep -E '^limine-timeshift-sync-1\.1\.0-1-any\.pkg\.tar\.zst(\.sig)?$' || true; } |
+            while read -r asset; do
+              gh release delete-asset "$PACKAGES_TAG" "$asset" --repo malik05051/Limine-extra --yes
+              echo "deleted $asset"
+            done
+          GH_TOKEN=$OWN_TOKEN gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --notes "Built by CI. Add this repository as described in the README."

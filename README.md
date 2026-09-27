@@ -1,8 +1,6 @@
 # My repo that hosts my packages for Arch Linux
 
-This repository's `repo` release holds only the pacman database. Each package
-is published in the `pacman` release of its own project, as
-[`releases.conf`](releases.conf) maps it.
+This repository's `repo` release holds the pacman database and every package.
 
 | Package | Description |
 | --- | --- |
@@ -30,15 +28,7 @@ Then add this to the end of `/etc/pacman.conf`:
 [malik05]
 SigLevel = Required
 Server = https://github.com/malik05051/malik05-repo/releases/download/repo
-CacheServer = https://github.com/malik05051/Limine-extra/releases/download/pacman
-CacheServer = https://github.com/malik05051/limine-timeshift-sync/releases/download/pacman
-CacheServer = https://github.com/malik05051/DLSS5-NeuralScreen-Linux/releases/download/pacman
-CacheServer = https://github.com/malik05051/systemd-arab-edition/releases/download/pacman
 ```
-
-`Server` is where the database is; pacman looks for the packages in the
-`CacheServer` releases, and does not report the ones that lack a package. This
-needs pacman 6.1 or newer.
 
 Then:
 
@@ -54,52 +44,41 @@ them in an `archlinux:base-devel` container on every push to `main` and on
 demand, then:
 
 1. runs `makepkg -s` for each package,
-2. uploads each package to the `pacman` release of the project
-   `releases.conf` names for it,
-3. adds the results to `malik05.db.tar.gz` with `repo-add`, carrying the
+2. adds the results to `malik05.db.tar.gz` with `repo-add`, carrying the
    published database forward so packages this run did not build keep their
    entries,
-4. uploads the database to the `repo` release.
+3. uploads the packages and the database to the `repo` release.
 
 `.db` and `.files` are uploaded as copies of their `.tar.gz` counterparts,
 because `repo-add` makes them symlinks and a release asset cannot be one.
 
-Packages uploaded by hand, such as `systemd-arab-edition`, go in their
-project's `pacman` release, and are not indexed by that workflow, which only
-sees what it built. Run **Reindex the repository database**
-([`.github/workflows/reindex.yml`](.github/workflows/reindex.yml)) from the
-Actions tab after such an upload: it rebuilds the database from every package
-in the projects' releases, keeping the newest version of each. Packages still
-in this repository's release are moved to their projects' releases and
-deleted here.
-
-Writing to the projects' releases needs a
-[fine-grained token](https://github.com/settings/personal-access-tokens/new)
-with **Contents: Read and write** on every repository in `releases.conf`,
-stored as the `RELEASES_TOKEN` Actions secret. A new package also needs a line
-in `releases.conf`.
+Packages uploaded by hand, such as `systemd-arab-edition`, are not indexed by
+that workflow, which only sees what it built. Run **Reindex the repository
+database** ([`.github/workflows/reindex.yml`](.github/workflows/reindex.yml))
+from the Actions tab after such an upload: it rebuilds the database from every
+package in the release, keeping the newest version of each.
 
 ## Managing packages
 
-Everything is done from GitHub: pushes to this repository, the project
-releases' pages, and the Actions tab.
+Everything is done from GitHub: pushes to this repository, the
+[`repo` release](https://github.com/malik05051/malik05-repo/releases/tag/repo)'s
+page, and the Actions tab.
 
 - **Update a package built here**: edit its `PKGBUILD` (a new `pkgver`,
   `_tag` or `pkgrel`) and push. The build publishes it and updates the
   database.
-- **Add a package built here**: add a directory with a `PKGBUILD` and a line
-  in [`releases.conf`](releases.conf), then push.
+- **Add a package built here**: add a directory with a `PKGBUILD`, then push.
 - **Publish or update a package built elsewhere**, like `systemd-arab-edition`:
-  upload the `.pkg.tar.zst` files to its project's `pacman` release (edit the
-  release and drop them in), then run **Reindex the repository database**.
-  Unsigned uploads get signed.
+  upload the `.pkg.tar.zst` files to the `repo` release (edit the release and
+  drop them in), then run **Reindex the repository database**. Unsigned
+  uploads get signed.
 - **Remove a package**: run **Remove a package** with its name. It is taken
   out of the database and, unless you untick it, its files are deleted from
-  its project's release. For a package built here, also delete its directory,
-  or the next push brings it back.
-- **Roll back to an older version**: delete the newer files from the
-  project's release and run **Reindex the repository database**. It indexes
-  the newest version left.
+  the release. For a package built here, also delete its directory, or the
+  next push brings it back.
+- **Roll back to an older version**: delete the newer files from the release
+  and run **Reindex the repository database**. It indexes the newest version
+  left.
 
 ## Signing the packages
 
