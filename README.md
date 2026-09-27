@@ -77,6 +77,28 @@ with **Contents: Read and write** on every repository in `releases.conf`,
 stored as the `RELEASES_TOKEN` Actions secret. A new package also needs a line
 in `releases.conf`.
 
+## Managing packages
+
+Everything is done from GitHub: pushes to this repository, the project
+releases' pages, and the Actions tab.
+
+- **Update a package built here**: edit its `PKGBUILD` (a new `pkgver`,
+  `_tag` or `pkgrel`) and push. The build publishes it and updates the
+  database.
+- **Add a package built here**: add a directory with a `PKGBUILD` and a line
+  in [`releases.conf`](releases.conf), then push.
+- **Publish or update a package built elsewhere**, like `systemd-arab-edition`:
+  upload the `.pkg.tar.zst` files to its project's `pacman` release (edit the
+  release and drop them in), then run **Reindex the repository database**.
+  Unsigned uploads get signed.
+- **Remove a package**: run **Remove a package** with its name. It is taken
+  out of the database and, unless you untick it, its files are deleted from
+  its project's release. For a package built here, also delete its directory,
+  or the next push brings it back.
+- **Roll back to an older version**: delete the newer files from the
+  project's release and run **Reindex the repository database**. It indexes
+  the newest version left.
+
 ## Signing the packages
 
 Every package and the database are signed by

@@ -1,0 +1,116 @@
+name: Remove a package
+
+# Takes a package out of the database, so pacman stops offering it, and by
+# default deletes its files from its project's "pacman" release too. A package
+# still built from a directory here comes back on the next push unless that
+# directory goes as well.
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package name, e.g. neuralscreen-debug'
+        required: true
+        type: string
+      delete_files:
+        description: "Also delete its files from its project's release"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  REPO_NAME: malik05
+  RELEASE_TAG: repo
+  PACKAGES_TAG: pacman
+  GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+  PACKAGE: ${{ inputs.package }}
+
+jobs:
+  remove:
+    name: Remove ${{ inputs.package }}
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --noconfirm --needed git github-cli gnupg
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Import the signing key
+        if: env.GPG_PRIVATE_KEY != ''
+        run: |
+          set -eu
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          fpr="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
+          echo "GPG_KEY_ID=$fpr" >>"$GITHUB_ENV"
+
+      - name: Take it out of the database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if ! [[ "$PACKAGE" =~ ^[a-z0-9@._+][a-z0-9@._+-]*$ ]]; then
+            echo "::error::'$PACKAGE' is not a package name"
+            exit 1
+          fi
+          esc=$(printf '%s' "$PACKAGE" | sed 's/[.+]/\\&/g')
+          echo "$esc" >/tmp/escaped
+          mkdir -p /tmp/repo
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir /tmp/repo \
+            --pattern "$REPO_NAME.db.tar.gz" --pattern "$REPO_NAME.files.tar.gz"
+
+          # The file name the database records, to find the package's release.
+          desc=$(bsdtar -tf "/tmp/repo/$REPO_NAME.db.tar.gz" | grep -E "^$esc-[^-]+-[^-]+/desc$" || true)
+          if [ -z "$desc" ]; then
+            echo "::error::$PACKAGE is not in the database"
+            exit 1
+          fi
+          bsdtar -xOf "/tmp/repo/$REPO_NAME.db.tar.gz" "$desc" | sed -n '/^%FILENAME%$/{n;p}' >/tmp/filename
+          echo "removing $(cat /tmp/filename)"
+
+          if [ -n "${GPG_KEY_ID:-}" ]; then
+            repo-remove --sign --key "$GPG_KEY_ID" "/tmp/repo/$REPO_NAME.db.tar.gz" "$PACKAGE"
+          else
+            repo-remove "/tmp/repo/$REPO_NAME.db.tar.gz" "$PACKAGE"
+          fi
+
+          # Published as copies; a release asset cannot be a symlink.
+          for suffix in '' .sig; do
+            for name in db files; do
+              rm -f "/tmp/repo/$REPO_NAME.$name$suffix"
+              if [ -e "/tmp/repo/$REPO_NAME.$name.tar.gz$suffix" ]; then
+                cp "/tmp/repo/$REPO_NAME.$name.tar.gz$suffix" "/tmp/repo/$REPO_NAME.$name$suffix"
+              fi
+            done
+          done
+          rm -f /tmp/repo/*.old /tmp/repo/*.old.sig
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" /tmp/repo/* --clobber
+
+      # Every version of it, matched by the whole file name so that removing
+      # neuralscreen leaves neuralscreen-debug alone: the version, release and
+      # architecture fields never contain a dash.
+      - name: Delete its files from its project's release
+        if: inputs.delete_files
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          set -eu
+          repo=$(.github/scripts/release-repo "$(cat /tmp/filename)") || {
+            echo "releases.conf maps no repository for it; no files to delete"
+            exit 0
+          }
+          pattern="^$(cat /tmp/escaped)-[^-]+-[^-]+-[^-]+\\.pkg\\.tar\\.zst(\\.sig)?$"
+          gh release view "$PACKAGES_TAG" --repo "$repo" --json assets --jq '.assets[].name' |
+            { grep -E "$pattern" || true; } |
+            while read -r asset; do
+              gh release delete-asset "$PACKAGES_TAG" "$asset" --repo "$repo" --yes
+              echo "deleted $asset from $repo"
+            done

@@ -185,13 +185,15 @@ jobs:
             /tmp/repo/* --clobber
 
       # Only once the database pointing at the projects' releases is out.
+      # repo-add writes .tar.gz databases; any other copy was uploaded by hand
+      # and is stale by now.
       - name: Leave only the database in this release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-            grep -E '\.pkg\.tar\.zst(\.sig)?$|\.old(\.sig)?$' |
+            grep -E '\.pkg\.tar\.zst(\.sig)?$|\.old(\.sig)?$|\.(db|files)\.tar\.(zst|xz|bz2)(\.sig)?$' |
             while read -r asset; do
               gh release delete-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes
               echo "deleted $asset"
