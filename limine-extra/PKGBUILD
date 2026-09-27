@@ -1,21 +1,21 @@
 # Maintainer: malik05051 <belhajjimalik1@gmail.com>
 
-_pkgname=Limine-systemd-bootctl
-_tag=v12.9.3-modified
+_pkgname=Limine-extra
+_tag=v12.9.3-extra
 
 pkgname=limine-extra
 # A pkgver may not contain a hyphen; the tag's becomes a dot.
 pkgver=${_tag#v}
 pkgver=${pkgver//-/.}
 pkgrel=1
-# The version scheme changed from a commit count to the tag, and a tag such as
-# 12.9.1.modified sorts *below* the 12.9.0.r4468.g7ad9085c packages already
-# published: pacman compares "modified" against "r4468" as text. Without an
-# epoch nobody who installed one of those would ever be offered this.
-epoch=1
+# pacman compares the text after the last dot as text, so each change of
+# scheme would sort below what came before without a new epoch: 1 for the move
+# from 12.9.0.r4468.g7ad9085c to 12.9.1.modified, 2 for the move from
+# 12.9.3.modified to 12.9.3.extra.
+epoch=2
 pkgdesc='Limine bootloader with systemd Boot Loader Interface support'
 arch=('x86_64')
-url='https://github.com/malik05051/Limine-systemd-bootctl'
+url='https://github.com/malik05051/Limine-extra'
 license=('BSD-2-Clause')
 depends=('glibc' 'bash' 'coreutils' 'util-linux' 'gawk' 'findutils' 'grep' 'sed')
 makedepends=('git' 'autoconf' 'automake' 'nasm' 'mtools' 'llvm' 'clang' 'lld')
