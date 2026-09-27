@@ -110,9 +110,9 @@ jobs:
             --pattern "$REPO_NAME.files.tar.gz" || true
 
           # Names no PKGBUILD builds any more. A carried-forward database would
-          # otherwise keep offering them: limine was limine-systemd-bootctl
-          # renamed, and renamed back.
-          retired="limine"
+          # otherwise keep offering them: both are earlier names of
+          # limine-extra.
+          retired="limine limine-systemd-bootctl"
 
           if [ -n "${GPG_KEY_ID:-}" ]; then
             repo-add --sign --key "$GPG_KEY_ID" \

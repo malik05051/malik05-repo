@@ -1,7 +1,7 @@
 [Trigger]
 Operation = Upgrade
 Type = Package
-Target = limine-systemd-bootctl
+Target = limine-extra
 
 [Action]
 Description = Running the hooks written for Arch's limine...

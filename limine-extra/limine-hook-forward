@@ -6,9 +6,9 @@
 
 set -uo pipefail
 
-readonly PKG=limine-systemd-bootctl
+readonly PKG=limine-extra
 readonly AS=limine
-readonly SELF_PREFIX=80-limine-systemd-bootctl-forward
+readonly SELF_PREFIX=80-limine-extra-forward
 
 op=${1:-}
 case "$op" in

@@ -4,7 +4,7 @@ A pacman repository, built by CI and published through GitHub Releases.
 
 | Package | Built from | Description |
 | --- | --- | --- |
-| [`limine-systemd-bootctl`](limine-systemd-bootctl/) | this repository | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
+| [`limine-extra`](limine-extra/) | this repository | [Limine](https://github.com/malik05051/Limine-systemd-bootctl) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
 | [`limine-timeshift-sync`](limine-timeshift-sync/) | this repository | Lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with, and restores them with that kernel put back. |
 | `systemd-arab-edition` and friends | uploaded by hand | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
 
@@ -38,10 +38,10 @@ install whatever the release holds without checking who produced it.
 Then:
 
 ```console
-# pacman -Syu limine-systemd-bootctl
+# pacman -Syu limine-extra
 ```
 
-`limine-systemd-bootctl` provides, conflicts with and replaces `limine`, so
+`limine-extra` provides, conflicts with and replaces `limine`, so
 pacman offers to swap it in for Arch's `limine`. Both ship the same paths
 (`/usr/bin/limine`, `/usr/share/limine/`).
 
@@ -54,10 +54,11 @@ pacman, so nothing runs twice. Nothing needs setting up beyond what Arch's
 `limine` needed. The exception is hooks that run before a transaction: none
 of the known ones target `limine` by name.
 
-For a short while this package was published as `limine`. `pacman -Syu`
-replaces that with `limine-systemd-bootctl`. Hooks you added only because of
-the name, such as an `/etc/pacman.d/hooks/9x-limine-systemd-bootctl.hook`
-running `limine-install` or a `Target = limine-systemd-bootctl` line, can go.
+This package was called `limine-systemd-bootctl` before, and for a short while
+`limine`. `pacman -Syu` replaces either with `limine-extra`. Hooks you added
+only because of a name, such as an
+`/etc/pacman.d/hooks/9x-limine-systemd-bootctl.hook` running `limine-install`
+or a `Target = limine-systemd-bootctl` line, can go.
 
 The release also still carries the older `arab.db`, which indexes the
 `systemd-arab-edition` packages alone. It is left in place so that anyone
@@ -80,7 +81,7 @@ demand, then:
 `.db` and `.files` are uploaded as copies of their `.tar.gz` counterparts,
 because `repo-add` makes them symlinks and a release asset cannot be one.
 
-`limine-systemd-bootctl` builds from a git tag rather than a branch, so the
+`limine-extra` builds from a git tag rather than a branch, so the
 package is reproducible and the version the loader reports is stable. Shipping
 new work therefore means tagging the fork and bumping `_tag` in the PKGBUILD;
 commits pushed to `v12.x` alone change nothing here.
@@ -222,7 +223,7 @@ and reinstalling the kernel package after the reboot fixes it.
 A multi-profile UKI holds several command lines (normal boot, emergency
 shell, ...) under one signature. Limine can list each profile after `@0` as a
 menu entry of its own, but only for entries that opt in with
-`uki_profiles: yes`. `limine-systemd-bootctl` ships `limine-uki-profiles` to
+`uki_profiles: yes`. `limine-extra` ships `limine-uki-profiles` to
 set that option safely:
 
 ```console
