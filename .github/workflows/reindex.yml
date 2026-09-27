@@ -3,9 +3,6 @@ name: Reindex the repository database
 # Rebuilds the database from every package published in the release, rather
 # than from the packages one build happened to produce. Run it after adding
 # packages to the release by hand, or to recover a database that has drifted.
-#
-# Packages still in the projects' "pacman" releases, where they were published
-# for a while, are brought back into this release first.
 on:
   workflow_dispatch:
 
@@ -15,7 +12,6 @@ permissions:
 env:
   REPO_NAME: malik05
   RELEASE_TAG: repo
-  PACKAGES_TAG: pacman
   # Earlier names of limine-extra, never to be indexed again.
   RETIRED: limine limine-systemd-bootctl
   GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -56,22 +52,9 @@ jobs:
           mkdir -p /tmp/pkgs
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --dir /tmp/pkgs --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig' || true
-          # Only what is missing from the release, and the signatures minted
-          # below, need uploading afterwards.
+          # These are published already; only signatures minted below and the
+          # database need uploading afterwards.
           ls /tmp/pkgs >/tmp/published
-
-          # The projects are public, so this token can read their releases.
-          for repo in malik05051/Limine-extra malik05051/limine-timeshift-sync \
-                      malik05051/DLSS5-NeuralScreen-Linux malik05051/systemd-arab-edition; do
-            mkdir -p /tmp/project
-            gh release download "$PACKAGES_TAG" --repo "$repo" --dir /tmp/project \
-              --pattern '*.pkg.tar.zst' --pattern '*.pkg.tar.zst.sig' || true
-            for f in /tmp/project/*; do
-              [ -e "$f" ] || continue
-              [ -e "/tmp/pkgs/$(basename "$f")" ] || mv "$f" /tmp/pkgs/
-            done
-            rm -rf /tmp/project
-          done
           ls -l /tmp/pkgs
 
       - name: Sign whatever is not signed yet
@@ -184,18 +167,3 @@ jobs:
               gh release delete-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes
               echo "deleted $asset"
             done
-
-      - name: Delete the superseded limine-timeshift-sync from Limine-extra
-        env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-          OWN_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          gh release view "$PACKAGES_TAG" --repo malik05051/Limine-extra --json assets --jq '.assets[].name' |
-            { grep -E '^limine-timeshift-sync-1\.1\.0-1-any\.pkg\.tar\.zst(\.sig)?$' || true; } |
-            while read -r asset; do
-              gh release delete-asset "$PACKAGES_TAG" "$asset" --repo malik05051/Limine-extra --yes
-              echo "deleted $asset"
-            done
-          GH_TOKEN=$OWN_TOKEN gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --notes "Built by CI. Add this repository as described in the README."
