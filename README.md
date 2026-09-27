@@ -7,7 +7,7 @@ is published in the `pacman` release of its own project, as
 | Package | Description |
 | --- | --- |
 | [`limine-extra`](limine-extra/) | [Limine](https://github.com/malik05051/Limine-extra) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
-| [`limine-timeshift-sync`](limine-timeshift-sync/) | Lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with, and restores them with that kernel put back. |
+| [`limine-timeshift-sync`](limine-timeshift-sync/) | [limine-timeshift-sync](https://github.com/malik05051/limine-timeshift-sync): lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with, and restores them with that kernel put back. |
 | [`neuralscreen`](neuralscreen/) | [DLSS5-NeuralScreen-Linux](https://github.com/malik05051/DLSS5-NeuralScreen-Linux): NVIDIA's DLSS 5 neural renderer applied to the whole Wayland desktop. Its debug symbols are in `neuralscreen-debug`. |
 | `systemd-arab-edition` and friends | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
 
@@ -31,6 +31,7 @@ Then add this to the end of `/etc/pacman.conf`:
 SigLevel = Required
 Server = https://github.com/malik05051/malik05-repo/releases/download/repo
 CacheServer = https://github.com/malik05051/Limine-extra/releases/download/pacman
+CacheServer = https://github.com/malik05051/limine-timeshift-sync/releases/download/pacman
 CacheServer = https://github.com/malik05051/DLSS5-NeuralScreen-Linux/releases/download/pacman
 CacheServer = https://github.com/malik05051/systemd-arab-edition/releases/download/pacman
 ```

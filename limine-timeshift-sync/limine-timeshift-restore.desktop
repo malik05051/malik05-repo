@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Restore Timeshift snapshot
-Comment=Restore a Timeshift snapshot, putting its kernels back on the ESP
-Keywords=snapshot;restore;rollback;recovery;timeshift;btrfs;limine;
-Icon=timeshift
-Exec=limine-timeshift-restore
-Terminal=false
-Categories=System;
