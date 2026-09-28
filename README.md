@@ -5,6 +5,7 @@ This repository's `repo` release holds the pacman database and every package.
 | Package | Description |
 | --- | --- |
 | [`limine-extra`](limine-extra/) | [Limine](https://github.com/malik05051/Limine-extra) with systemd Boot Loader Interface support, so `bootctl` can see and drive it. Replaces Arch's `limine`. |
+| [`limine-entry-tool`](limine-entry-tool/) | [limine-entry-tool](https://gitlab.com/Zesko/limine-entry-tool) from the AUR, built here: `limine-install`, `limine-enroll-config` and the other Limine entry tools. |
 | [`limine-timeshift-sync`](limine-timeshift-sync/) | [limine-timeshift-sync](https://github.com/malik05051/limine-timeshift-sync): lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with, and restores them with that kernel put back. |
 | [`neuralscreen`](neuralscreen/) | [DLSS5-NeuralScreen-Linux](https://github.com/malik05051/DLSS5-NeuralScreen-Linux): NVIDIA's DLSS 5 neural renderer applied to the whole Wayland desktop. Its debug symbols are in `neuralscreen-debug`. |
 | `systemd-arab-edition` and friends | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
