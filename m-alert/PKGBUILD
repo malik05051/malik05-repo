@@ -7,7 +7,7 @@
 # Mise à jour : nouveau pkgver = tag vX.Y.Z de M-alert, puis mettre à jour la
 # première somme de sha256sums (`makepkg -g` l'affiche).
 pkgname=m-alert
-pkgver=1.2.1
+pkgver=1.2.2
 pkgrel=1
 pkgdesc="Alertes météo en temps réel par département, avec la carte de vigilance Météo-France"
 arch=('any')
@@ -22,7 +22,7 @@ install=m-alert.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
         "m-alert.sh"
         "m-alert.desktop")
-sha256sums=('a145de693e2d1180e67b5b8302eb11a7aee987fdfda9a13d22b76100a93f8a79'
+sha256sums=('18c5704312e3a587789e2c04c95e9fe8ca0afffd2db0a07764aa8e65246e1dd7'
             'b5e5c194082e6cefa57f679a1da62a04de4a691f3065b1d3b43ee527faab9d2b'
             'daad6ae061b5c08c33024be8f16ef0585f85c5376468ce97d4e6b783edd83193')
 
