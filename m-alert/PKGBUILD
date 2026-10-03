@@ -1,0 +1,45 @@
+# Maintainer: Malik <belhajjimalik1@gmail.com>
+#
+# M-Alert, lancé avec l'Electron du système (electron44) comme le recommande
+# https://wiki.archlinux.org/title/Electron_package_guidelines : le paquet ne
+# contient que l'application (JavaScript, HTML), d'où arch=('any').
+#
+# Mise à jour : nouveau pkgver = tag vX.Y.Z de M-alert, puis mettre à jour la
+# première somme de sha256sums (`makepkg -g` l'affiche).
+pkgname=m-alert
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Alertes météo en temps réel par département, avec la carte de vigilance Météo-France"
+arch=('any')
+url="https://github.com/malik05051/M-alert"
+# M-Alert n'a pas encore de fichier de licence ; Leaflet (carte) est sous BSD-2-Clause,
+# le lanceur sous 0BSD.
+license=('LicenseRef-M-Alert' 'BSD-2-Clause' '0BSD')
+depends=('electron44')
+optdepends=('libnotify: notifications du bureau'
+            'gnome-shell-extension-appindicator: icône dans la zone de notification sous GNOME')
+install=m-alert.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+        "m-alert.sh"
+        "m-alert.desktop")
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP')
+
+package() {
+    cd "$srcdir/M-alert-$pkgver"
+
+    # L'application : Electron lit package.json (nom, fichier principal) dans ce dossier.
+    local app="$pkgdir/usr/lib/$pkgname"
+    install -Dm644 package.json main.js preload.js background.js -t "$app"
+    cp -r --no-preserve=ownership web "$app/"
+    find "$app/web" -type d -exec chmod 755 {} + -o -type f -exec chmod 644 {} +
+
+    install -Dm755 "$srcdir/m-alert.sh" "$pkgdir/usr/bin/m-alert"
+    install -Dm644 "$srcdir/m-alert.desktop" -t "$pkgdir/usr/share/applications"
+    install -Dm644 web/icons/icon-512.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/m-alert.png"
+    install -Dm644 web/icons/icon-192.png "$pkgdir/usr/share/icons/hicolor/192x192/apps/m-alert.png"
+    install -Dm644 web/icons/icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/m-alert.svg"
+    install -Dm644 web/vendor/leaflet/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-leaflet"
+    install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"
+}

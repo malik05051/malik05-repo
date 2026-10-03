@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=M-Alert
+GenericName=Alertes météo
+Comment=Alertes météo en temps réel par département et carte de vigilance Météo-France
+Exec=/usr/bin/m-alert %U
+Icon=m-alert
+Terminal=false
+Categories=Utility;Network;
+Keywords=météo;meteo;alerte;vigilance;weather;alert;
+StartupWMClass=M-Alert

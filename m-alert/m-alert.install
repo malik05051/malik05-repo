@@ -1,0 +1,17 @@
+post_install() {
+    cat <<'EOT'
+
+M-Alert est installé. Lancez-le depuis le menu des applications ou avec :  m-alert
+
+ - Au premier lancement, choisissez votre département.
+ - Fermer la fenêtre laisse M-Alert actif dans la zone de notification.
+   Sous GNOME, cette icône demande l'extension AppIndicator
+   (gnome-shell-extension-appindicator) ; relancer m-alert rouvre la fenêtre.
+ - Lancement au démarrage : Réglages > « Lancer M-Alert au démarrage ».
+
+EOT
+}
+
+post_upgrade() {
+    :
+}

@@ -10,6 +10,7 @@ This repository's `repo` release holds the pacman database and every package.
 | [`limine-dracut-support`](limine-dracut-support/) | The same for dracut. Replaces `limine-entry-tool`, and conflicts with `limine-mkinitcpio-hook`. |
 | [`limine-timeshift-sync`](limine-timeshift-sync/) | [limine-timeshift-sync](https://github.com/malik05051/limine-timeshift-sync): lists Timeshift's btrfs snapshots in the Limine menu, each bootable with the kernel it was taken with, and restores them with that kernel put back. |
 | [`neuralscreen`](neuralscreen/) | [DLSS5-NeuralScreen-Linux](https://github.com/malik05051/DLSS5-NeuralScreen-Linux): NVIDIA's DLSS 5 neural renderer applied to the whole Wayland desktop. Its debug symbols are in `neuralscreen-debug`. |
+| [`m-alert`](m-alert/) | [M-Alert](https://github.com/malik05051/M-alert): alertes météo en temps réel par département, avec la carte de vigilance Météo-France. Runs on the system `electron44`. |
 | `systemd-arab-edition` and friends | [systemd-arab-edition](https://github.com/malik05051/systemd-arab-edition), along with its `-libs`, `-resolvconf`, `-sysvcompat`, `-tests` and `-ukify` packages. |
 
 ## Using the repository
