@@ -10,8 +10,8 @@
 # looks for it at ~/.local/share/neuralscreen/nvngx_dlssnr.dll (or NS_NR_DLL)
 # and `neuralscreen --setup` prepares the Proton prefix once.
 pkgname=neuralscreen
-pkgver=1.8.2.r345.ge9672d4
-_commit=e9672d40116e7dd9d815b3b304b51a9615715440
+pkgver=1.8.2.r347.g6a58cfd
+_commit=6a58cfdd00526d15685fabe02d401c070efc7964
 pkgrel=1
 pkgdesc="NVIDIA's DLSS 5 neural renderer applied to the whole Wayland desktop"
 arch=('x86_64')
