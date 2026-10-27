@@ -1,13 +1,18 @@
 # Maintainer: malik05051 <belhajjimalik1@gmail.com>
 
 _pkgname=Limine-extra
-_tag=v12.9.5-extra
+_tag=v12.9.5-extra.2
 
 pkgname=limine-extra
-# A pkgver may not contain a hyphen; the tag's becomes a dot.
-pkgver=${_tag#v}
-pkgver=${pkgver//-/.}
+# A pkgver may not contain a hyphen; the tag's becomes a dot. A tag ending in
+# .N reuses upstream's release number, and N is the package release:
+# v12.9.5-extra.2 is 12.9.5.extra-2. The loader reports the tag as written.
+_ver=${_tag#v}
+pkgver=${_ver%%-extra*}.extra
 pkgrel=1
+if [[ $_ver == *-extra.* ]]; then
+    pkgrel=${_ver##*-extra.}
+fi
 # pacman compares the text after the last dot as text, so each change of
 # scheme would sort below what came before without a new epoch: 1 for the move
 # from 12.9.0.r4468.g7ad9085c to 12.9.1.modified, 2 for the move from
@@ -43,15 +48,6 @@ sha256sums=('SKIP'
             'd8c87182332fb47f279248ab0cd3838e223a06d39fd31d3acce3d23c43afb02a'
             '8cb2cddcca159675040c2b3df3991cf2d4cdda538fa506478c201efa54ac36d6'
             '1cb9e1f3384bb3a4b49cff52ebea418469eaaa048fed924443efeb377e93278f')
-
-pkgver() {
-    cd "${_pkgname}"
-
-    # A pkgver may not contain a hyphen, so the one in the tag becomes a dot.
-    # The loader still reports the tag as it is written: version.sh feeds
-    # LoaderInfo, and it has no such restriction.
-    git describe --tags | sed 's/^v//; s/-/./g'
-}
 
 prepare() {
     cd "${_pkgname}"
