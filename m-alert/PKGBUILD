@@ -4,14 +4,14 @@
 # https://wiki.archlinux.org/title/Electron_package_guidelines : le paquet ne
 # contient que l'application (JavaScript, HTML), d'où arch=('any').
 #
-# Mise à jour : nouveau pkgver = tag vX.Y.Z de M-alert, puis mettre à jour la
+# Mise à jour : nouveau pkgver = tag vX.Y.Z de M-Alert, puis mettre à jour la
 # première somme de sha256sums (`makepkg -g` l'affiche).
 pkgname=m-alert
 pkgver=2.6.1
 pkgrel=1
 pkgdesc="Alertes météo en temps réel par département, avec la carte de vigilance Météo-France"
 arch=('any')
-url="https://github.com/malik05051/M-alert"
+url="https://github.com/malik05051/M-Alert"
 # M-Alert n'a pas encore de fichier de licence ; Leaflet (carte) est sous BSD-2-Clause,
 # le lanceur sous 0BSD.
 license=('LicenseRef-M-Alert' 'BSD-2-Clause' '0BSD')
@@ -27,7 +27,8 @@ sha256sums=('5abacc3bd94519e4903c5dcf4abe08ed1e1ef9f5f78bbb892936b910014804d2'
             'daad6ae061b5c08c33024be8f16ef0585f85c5376468ce97d4e6b783edd83193')
 
 package() {
-    cd "$srcdir/M-alert-$pkgver"
+    # Dossier de l'archive : nom du dépôt sur GitHub (M-Alert, anciennement M-alert).
+    cd "$srcdir"/[Mm]-[Aa]lert-"$pkgver"
 
     # L'application : Electron lit package.json (nom, fichier principal) dans ce dossier.
     local app="$pkgdir/usr/lib/$pkgname"
