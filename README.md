@@ -64,6 +64,9 @@ package in the release, keeping the newest version of each.
 
 ## Managing packages
 
+Step-by-step instructions for updating the Limine fork and publishing any
+package are in [WORKFLOW_HELP.md](WORKFLOW_HELP.md).
+
 Everything is done from GitHub: pushes to this repository, the
 [`repo` release](https://github.com/malik05051/malik05-repo/releases/tag/repo)'s
 page, and the Actions tab.
