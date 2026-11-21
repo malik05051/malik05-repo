@@ -11,10 +11,10 @@
 #
 # Mise à jour : _commit = commit du tag vX.Y.Z (`git ls-remote` le donne), pkgver,
 # pkgrel, puis la première somme de sha256sums (`makepkg -g` l'affiche).
-_commit=488ebd827b76b39f87364b09d124fdbd932edff6
+_commit=658e24bcf342af1c269d4d85d11dbf1fde981203
 pkgname=m-alert
-pkgver=3.2.0
-pkgrel=10
+pkgver=3.2.1
+pkgrel=1
 pkgdesc="Alertes météo en temps réel par département, avec la carte de vigilance Météo-France"
 arch=('any')
 url="https://github.com/malik05051/M-Alert"
@@ -28,7 +28,7 @@ install=m-alert.install
 source=("$pkgname-$pkgver-${_commit:0:7}.tar.gz::$url/archive/$_commit.tar.gz"
         "m-alert.sh"
         "m-alert.desktop")
-sha256sums=('8a529c93f841518df762759460da9307bf696c619b726fe6fec84d8759c0bbe3'
+sha256sums=('39c5786743c068c33feb172d221ec638a099f30ca8f47bb4f67ac6e671969725'
             'b5e5c194082e6cefa57f679a1da62a04de4a691f3065b1d3b43ee527faab9d2b'
             'daad6ae061b5c08c33024be8f16ef0585f85c5376468ce97d4e6b783edd83193')
 
