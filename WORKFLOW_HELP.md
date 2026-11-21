@@ -20,7 +20,22 @@ cd Limine-extra
 git remote add upstream https://github.com/Limine-Bootloader/Limine.git
 ```
 
-### Merge the new upstream release
+### Check GitHub first
+
+Open the repository page. Under the branch picker it says whether `v12.x` is
+behind `Limine-Bootloader:v12.x`:
+
+- **Up to date:** nothing to merge. Run `git pull` and go to step 2.
+- **Behind, and "Sync fork" offers to update the branch:** there are no
+  conflicts. Click **Update branch**, wait for the **Run the checks** workflow
+  to go green, then run `git pull` and go to step 2. Nothing else is needed.
+- **Behind, and "Sync fork" says it cannot merge:** there are conflicts.
+  Merge locally, below.
+
+### Merge locally
+
+Always start from GitHub's copy, so you never redo a merge that is already
+there:
 
 ```console
 git switch v12.x
@@ -31,17 +46,65 @@ git merge upstream/v12.x
 
 - **No conflicts:** git opens an editor for the merge message; save and close
   it.
-- **Conflicts:** `git status` lists the files. In each one, keep both sides'
-  changes and delete the `<<<<<<<`, `=======` and `>>>>>>>` lines. Then:
+- **Conflicts:** see the next section.
+- **To give up at any point:** `git merge --abort` puts everything back as it
+  was before the merge.
 
-  ```console
-  git add <file>
-  git commit
-  ```
+### Resolving conflicts
 
-- **Shortcut:** when GitHub says the fork has no conflicts, the **Sync fork**
-  button on the repository page does the same merge. Then run `git pull` and
-  carry on.
+`git status` lists the files under "Unmerged paths" ("Chemins non fusionnés"
+in French). It says how each one conflicts:
+
+- **both modified** ("modifié des deux côtés"): both sides changed the same
+  lines.
+- **both added** ("ajouté de deux côtés"): both sides created a file with the
+  same name.
+
+`git diff <file>` shows each conflict. Our version is between `<<<<<<<` and
+`=======`, upstream's between `=======` and `>>>>>>>`. For each one:
+
+1. Keep what both sides need. Usually that is both: upstream's change, and
+   our addition next to it. Dropping our side loses one of the fork's
+   features.
+2. Delete the three marker lines.
+3. When the file has no markers left, run `git add <file>`.
+
+When every file is added, run `git commit`. Then build (below): a merge that
+resolves cleanly can still fail to compile, when upstream renamed something
+our code uses.
+
+If a conflict looks hard, run `git merge --abort` and ask for help. Nothing
+is lost.
+
+### Where the fork's conflicts happen
+
+The fork adds code to these files, so they are the ones upstream changes
+collide with:
+
+| File | What the fork adds there |
+| --- | --- |
+| `common/lib/bli.c`, `bli.h` | The extra Boot Loader Interface variables and `LoaderFeatures` bits |
+| `common/menu.c` | Multi-profile UKI entries, Type #1 entries, `@saved` and preferred entries |
+| `common/lib/bls.c`, `bls.h` | Type #1 (`/loader/entries`) support |
+| `common/lib/smbios.c`, `smbios.h` | Upstream's SMBIOS reader plus the fork's PCR 1 measurement |
+| `common/lib/tpm.c`, `tpm.h` | Tagged measurements and PCR bank reporting |
+| `common/lib/dropin.c`, `hii.c`, `uki.c`, `pe.c` | Drop-in drivers, keyboard layout, UKI profiles |
+| `checks/cases/uefi.py`, `tpm.py` | The fork's expected `LoaderFeatures` and SMBIOS prompts |
+
+### A merge you already did
+
+If `git merge` shows conflicts that you (or a merged pull request) resolved
+before, your local `v12.x` is older than GitHub's: you skipped `git pull`, or
+an earlier merge is still half done. Don't resolve them again:
+
+```console
+git merge --abort
+git pull
+git log --oneline -3
+```
+
+The top commit should match the newest one on GitHub's `v12.x`. Then check
+GitHub again, from the top of this step.
 
 ### Check that it builds
 
