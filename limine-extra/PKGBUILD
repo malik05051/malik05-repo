@@ -1,7 +1,7 @@
 # Maintainer: malik05051 <belhajjimalik1@gmail.com>
 
 _pkgname=Limine-extra
-_tag=v12.11.0-extra
+_tag=v12.11.0-extra.2
 
 pkgname=limine-extra
 # A pkgver may not contain a hyphen; the tag's becomes a dot. A tag ending in
