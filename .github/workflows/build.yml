@@ -61,13 +61,24 @@ jobs:
           set -eu
           mkdir -p /tmp/out
           chown builder:builder /tmp/out
+          # One package that fails (a moved tag, a source that no longer
+          # builds) must not hold back the others: carry on, publish what
+          # built, and fail the run at the end so the red run still shows it.
+          # The failed package keeps its current entry and files in the
+          # release until it builds again.
+          failed=""
           for pkgbuild in */PKGBUILD; do
             dir="$(dirname "$pkgbuild")"
             echo "::group::$dir"
-            ( cd "$dir" && sudo -u builder PKGDEST=/tmp/out makepkg -s --noconfirm --needed )
+            if ! ( cd "$dir" && sudo -u builder PKGDEST=/tmp/out makepkg -s --noconfirm --needed ); then
+              failed="$failed $dir"
+              echo "::error title=Build failed::$dir did not build; its published version is kept"
+            fi
             echo "::endgroup::"
           done
+          echo "FAILED_PACKAGES=${failed# }" >>"$GITHUB_ENV"
           ls -l /tmp/out
+          ls /tmp/out/*.pkg.tar.zst >/dev/null 2>&1 || { echo "::error::No package built"; exit 1; }
 
       - name: Make the filenames URL-safe
         run: |
@@ -158,3 +169,9 @@ jobs:
               --title "Package repository" \
               --notes "Built by CI. Add this repository as described in the README."
           gh release upload "$RELEASE_TAG" /tmp/repo/* --clobber
+
+      - name: Report the packages that did not build
+        if: env.FAILED_PACKAGES != ''
+        run: |
+          echo "::error::Not built (previous version kept): $FAILED_PACKAGES"
+          exit 1

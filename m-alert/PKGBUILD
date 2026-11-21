@@ -4,8 +4,14 @@
 # https://wiki.archlinux.org/title/Electron_package_guidelines : le paquet ne
 # contient que l'application (JavaScript, HTML), d'où arch=('any').
 #
-# Mise à jour : nouveau pkgver = tag vX.Y.Z de M-Alert, puis mettre à jour la
-# première somme de sha256sums (`makepkg -g` l'affiche).
+# Source : l'archive d'un commit précis de M-Alert (_commit, hash complet), pas celle
+# du tag. Un commit ne change jamais : remplacer une release (le tag vX.Y.Z déplacé
+# sur un autre commit) ne casse donc pas la somme ci-dessous, et le paquet reste
+# exactement le code vérifié jusqu'à la mise à jour suivante.
+#
+# Mise à jour : _commit = commit du tag vX.Y.Z (`git ls-remote` le donne), pkgver,
+# pkgrel, puis la première somme de sha256sums (`makepkg -g` l'affiche).
+_commit=b433e25062013de246902f3e462c4597ab823f96
 pkgname=m-alert
 pkgver=3.2.0
 pkgrel=6
@@ -19,16 +25,17 @@ depends=('electron44')
 optdepends=('libnotify: notifications du bureau'
             'gnome-shell-extension-appindicator: icône dans la zone de notification sous GNOME')
 install=m-alert.install
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+source=("$pkgname-$pkgver-${_commit:0:7}.tar.gz::$url/archive/$_commit.tar.gz"
         "m-alert.sh"
         "m-alert.desktop")
-sha256sums=('74908e3542520019f1ad7a3cdc2d344222f48f2985c55b5f0b1c9acd8a21f054'
+sha256sums=('6eaec893d250db74f5f360fcec331f3db0f22b5ae7e94071b44691451eb9fc8c'
             'b5e5c194082e6cefa57f679a1da62a04de4a691f3065b1d3b43ee527faab9d2b'
             'daad6ae061b5c08c33024be8f16ef0585f85c5376468ce97d4e6b783edd83193')
 
 package() {
-    # Dossier de l'archive : nom du dépôt sur GitHub (M-Alert, anciennement M-alert).
-    cd "$srcdir"/[Mm]-[Aa]lert-"$pkgver"
+    # Dossier de l'archive : nom du dépôt sur GitHub (M-Alert, anciennement M-alert)
+    # suivi du hash complet du commit.
+    cd "$srcdir"/[Mm]-[Aa]lert-"$_commit"
 
     # L'application : Electron lit package.json (nom, fichier principal) dans ce dossier.
     local app="$pkgdir/usr/lib/$pkgname"

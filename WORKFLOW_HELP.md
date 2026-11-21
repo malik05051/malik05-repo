@@ -204,7 +204,7 @@ All of them follow step 3: edit the `PKGBUILD`, push, wait for the green run.
 | `limine-timeshift-sync` | [limine-timeshift-sync](https://github.com/malik05051/limine-timeshift-sync) (tag) | Push a new tag such as `v1.2.0` there first, then set `_tag=v1.2.0` and `pkgrel=1` |
 | `neuralscreen` | [DLSS5-NeuralScreen-Linux](https://github.com/malik05051/DLSS5-NeuralScreen-Linux) (commit) | `_commit=` (the full hash) and `pkgver=1.8.2.r<count>.g<short hash>`, from `git rev-list --count <commit>` and `git rev-parse --short=7 <commit>` |
 | `limine-entry-tool`, `limine-mkinitcpio-hook`, `limine-dracut-support` | Copies of the AUR packages | Replace all three `PKGBUILD`s with the new AUR ones together: they build from the same tag. Keep the comment at the top of each. |
-| `m-alert` | [M-Alert](https://github.com/malik05051/M-Alert) (tag `v<pkgver>`) | Push the tag there first, then set `pkgver=`, `pkgrel=1`, and the first `sha256sums` entry (`makepkg -g` prints it) |
+| `m-alert` | [M-Alert](https://github.com/malik05051/M-Alert) (commit of tag `v<pkgver>`) | Push the tag there first, then set `_commit=` (the full hash the tag points at, from `git ls-remote --tags`), `pkgver=`, `pkgrel=1`, and the first `sha256sums` entry (`makepkg -g` prints it). It builds from the commit, not the tag, so replacing a release (moving the tag) does not break the build: it keeps the previous commit until this is updated |
 
 To rebuild a package without a code change (for example after a packaging
 fix), raise its `pkgrel` by one. Otherwise pacman sees the same version and
@@ -231,7 +231,7 @@ does not update.
 | --- | --- | --- |
 | Tag pushed, nothing changes | The package builds from `_tag` in the `PKGBUILD`, not from the newest tag | Step 3 |
 | `PKGBUILD` pushed, still the old version | The build has not finished yet | Wait for the green run, then `sudo pacman -Syu` |
-| Build run is red | The tag does not exist, or the source no longer builds | Open the failed run's log; check `git ls-remote --tags` for the tag |
+| Build run is red | The tag does not exist, or the source no longer builds. The other packages are still built and published; only the ones named in the last step ("Report the packages that did not build") kept their previous version | Open the failed run's log; check `git ls-remote --tags` for the tag |
 | pacman still says "there is nothing to do" | Local database copy is stale | `sudo pacman -Syyu` |
 | Version did not go up | `pkgrel` or the tag was not raised | Raise one of them and push again |
 | "invalid or corrupted package (PGP signature)" | The repository key is not trusted | See "Using the repository" in [README.md](README.md) |
